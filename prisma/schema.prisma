@@ -1,0 +1,1163 @@
+// ======================================
+//  PRISMA CONFIG
+// ======================================
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ======================================
+//  ENUMS (GLOBAL)
+// ======================================
+enum UserRole {
+  ADMIN
+  SUPERVISOR
+  TESORERIA
+  OPERACIONES
+  CONSULTA
+  USER
+}
+
+enum FinanceMovementType {
+  ADVANCE
+  PAYMENT
+  ADJUSTMENT
+}
+
+enum Currency {
+  USD
+  VES
+}
+
+enum AdministrativeAccountType {
+  CASH
+  BANK
+  INTERNAL
+  FUND
+}
+
+enum AdministrativeMovementType {
+  DEPOSIT
+  WITHDRAW
+  TRANSFER
+  ADJUST
+}
+
+enum AdministrativeAuditAction {
+  CREATE_ACCOUNT
+  CREATE_MOVEMENT
+  CREATE_TRANSFER
+  UPDATE_ACCOUNT
+}
+
+enum PricingTag {
+  SEMILLA
+  INSUMO
+  MATERIA_PRIMA
+  PRODUCTO_TERMINADO
+}
+
+// =========================
+//  INVENTARIO (ERP NUEVO)
+// =========================
+enum InventoryMovementType {
+  IN
+  OUT
+  ADJUST
+}
+
+enum CodeResetPolicy {
+  NEVER
+  YEARLY
+  MONTHLY
+  DAILY
+}
+
+// ======================================
+//  AUTH / USERS
+// ======================================
+model User {
+  id       Int      @id @default(autoincrement())
+  email    String   @unique @db.VarChar(150)
+  password String   @db.VarChar(200)
+  name     String?  @db.VarChar(150)
+  role     UserRole @default(USER)
+
+  active Boolean @default(true) // ✅ ESTE CAMPO FALTABA
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  // back-relations ventas
+  salesCreated        SaleInvoice[]         @relation("SaleCreatedBy")
+  salesConfirmed      SaleInvoice[]         @relation("SaleConfirmedBy")
+  UserWarehouseAccess UserWarehouseAccess[]
+  UserProducerAccess  UserProducerAccess[]
+  UserCompanyAccess   UserCompanyAccess[]
+
+  @@map("users")
+}
+
+model roles {
+  id   Int    @id @default(autoincrement())
+  name String @unique
+}
+
+model role_permissions {
+  id         Int     @id @default(autoincrement())
+  role       String  @db.VarChar(30) // "ADMIN" | "SUPERVISOR" | ...
+  module     String  @db.VarChar(50) // "dashboard" | "finanzas" | ...
+  enabled    Boolean @default(false)
+  can_view   Boolean @default(false)
+  can_create Boolean @default(false)
+  can_edit   Boolean @default(false)
+  can_delete Boolean @default(false)
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @updatedAt @db.Timestamp(6)
+
+  @@unique([role, module])
+  @@map("role_permissions")
+}
+
+// ======================================
+//  MAESTROS / CORE (Clientes, Proveedores, Productos, Almacenes)
+// ======================================
+model clients {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(150)
+  rif        String?   @db.VarChar(20)
+  email      String?   @db.VarChar(120)
+  phone      String?   @db.VarChar(30)
+  address    String?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  sales       sales[]
+  SaleInvoice SaleInvoice[]
+}
+
+model suppliers {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(150)
+  rif        String?   @db.VarChar(20)
+  phone      String?   @db.VarChar(30)
+  address    String?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  // legacy
+  purchase_orders purchase_orders[]
+  receipts        receipts[]
+
+  // ERP nuevo
+  financedItems FinancedItem[]
+}
+
+model products {
+  id                   Int                    @id @default(autoincrement())
+  code                 String?                @unique @db.VarChar(30)
+  name                 String?                @db.VarChar(120)
+  category             String?                @db.VarChar(60)
+  unit                 String?                @default("kg") @db.VarChar(20)
+  created_at           DateTime?              @default(now()) @db.Timestamp(6)
+  pricingTag           PricingTag             @default(INSUMO)
+  active               Boolean                @default(true)
+  // legacy
+  inventory_lots       inventory_lots[]
+  purchase_items       purchase_items[]
+  purchase_order_items purchase_order_items[]
+  quality_parameters   quality_parameters[]
+  receipts             receipts[]
+  sale_items           sale_items[]
+  basePriceUsd         Decimal?               @db.Decimal(18, 6)
+
+  // ERP nuevo
+  PurchaseItem PurchaseItem[]
+}
+
+model warehouses {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(150)
+  location   String?
+  notes      String?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  inventory_lots      inventory_lots[]
+  inventory_movements inventory_movements[]
+  purchase_items      purchase_items[]
+  userAccess          UserWarehouseAccess[]
+}
+
+// ======================================
+//  PRODUCTORES / CAMPO (Legacy)
+// ======================================
+model producers {
+  id         Int       @id @default(autoincrement())
+  code       String?   @unique
+  name       String    @db.VarChar(150)
+  rif        String?   @db.VarChar(20)
+  phone      String?   @db.VarChar(30)
+  address    String?
+  risk_level String?   @db.VarChar(2)
+  status     String?   @default("activo") @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  email        String?
+  municipality String?
+  state        String?
+  totalAreaHa  Float?
+  town         String?
+
+  // legacy
+  advances                  advances[]
+  crop_plans                crop_plans[]
+  producer_finance_accounts producer_finance_accounts[]
+  producer_liquidations     producer_liquidations[]
+  receipts                  receipts[]
+  supply_deliveries         supply_deliveries[]
+  technical_reports         technical_reports[]
+
+  // ERP nuevo
+  finance_movements        FinanceMovement[]
+  financingPlans           FinancingPlan[]
+  producerPaymentSchedules ProducerPaymentSchedule[]
+
+  userAccess  UserProducerAccess[]
+  SaleInvoice SaleInvoice[]
+}
+
+model advances {
+  id          Int        @id @default(autoincrement())
+  producer_id Int?
+  amount_usd  Decimal?   @db.Decimal(12, 2)
+  amount_bs   Decimal?   @db.Decimal(12, 2)
+  rate        Decimal?   @db.Decimal(10, 2)
+  type        String?    @db.VarChar(50)
+  date        DateTime?  @default(now()) @db.Timestamp(6)
+  notes       String?
+  producers   producers? @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model crop_plans {
+  id             Int       @id @default(autoincrement())
+  producer_id    Int?
+  crop           String?   @db.VarChar(50)
+  hectares       Decimal?  @db.Decimal(10, 2)
+  expected_yield Decimal?  @db.Decimal(10, 2)
+  cycle          String?   @db.VarChar(50)
+  start_date     DateTime? @db.Date
+  end_date       DateTime? @db.Date
+
+  producers         producers?          @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  technical_reports technical_reports[]
+
+  // ERP nuevo
+  financeMovements FinanceMovement[]
+  financingPlans   FinancingPlan[]   @relation("CropPlanFinancingPlans")
+}
+
+model technical_reports {
+  id           Int         @id @default(autoincrement())
+  producer_id  Int?
+  crop_plan_id Int?
+  report       String?
+  photo_url    String?
+  date         DateTime?   @default(now()) @db.Timestamp(6)
+  stage        String?     @db.VarChar(50)
+  issues       String?
+  crop_plans   crop_plans? @relation(fields: [crop_plan_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  producers    producers?  @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model producer_finance_accounts {
+  id          Int       @id @default(autoincrement())
+  producer_id Int?
+  cycle       String?   @db.VarChar(50)
+  total_debt  Decimal?  @default(0) @db.Decimal(12, 2)
+  total_paid  Decimal?  @default(0) @db.Decimal(12, 2)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+
+  producers producers? @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model producer_liquidations {
+  id          Int       @id @default(autoincrement())
+  producer_id Int?
+  cycle       String?   @db.VarChar(50)
+  date        DateTime? @default(now()) @db.Timestamp(6)
+  status      String?   @default("pending") @db.VarChar(20)
+  notes       String?
+
+  producers            producers?             @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  liquidation_receipts liquidation_receipts[]
+}
+
+model liquidation_receipts {
+  id               Int       @id @default(autoincrement())
+  liquidation_id   Int?
+  receipt_id       Int?
+  kilos_financed   Decimal?  @db.Decimal(12, 2)
+  kilos_free       Decimal?  @db.Decimal(12, 2)
+  price_equivalent Decimal?  @db.Decimal(12, 4)
+  total_equivalent Decimal?  @db.Decimal(12, 2)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+
+  producer_liquidations producer_liquidations? @relation(fields: [liquidation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receipts              receipts?              @relation(fields: [receipt_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model supply_deliveries {
+  id          Int       @id @default(autoincrement())
+  producer_id Int?
+  insumo      String?   @db.VarChar(120)
+  quantity    Decimal?  @db.Decimal(12, 2)
+  cost        Decimal?  @db.Decimal(12, 2)
+  date        DateTime? @default(now()) @db.Timestamp(6)
+  notes       String?
+
+  producers producers? @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ======================================
+//  COMPRAS (Legacy)
+// ======================================
+model purchase_orders {
+  id            Int       @id @default(autoincrement())
+  code          String?   @unique @db.VarChar(30)
+  supplier_id   Int?
+  order_number  String?   @db.VarChar(50)
+  date          DateTime? @default(now()) @db.Timestamp(6)
+  expected_date DateTime? @db.Timestamp(6)
+  status        String?   @default("pending") @db.VarChar(20)
+  notes         String?
+
+  suppliers            suppliers?             @relation(fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_invoices    purchase_invoices[]
+  purchase_order_items purchase_order_items[]
+}
+
+model purchase_order_items {
+  id                Int      @id @default(autoincrement())
+  code              String?  @unique @db.VarChar(30)
+  purchase_order_id Int?
+  product_id        Int?
+  quantity_ordered  Decimal? @db.Decimal(12, 2)
+  price_estimated   Decimal? @db.Decimal(12, 4)
+  quantity_received Decimal? @default(0) @db.Decimal(12, 2)
+  unit              String?  @default("kg") @db.VarChar(20)
+  notes             String?
+
+  products        products?        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_orders purchase_orders? @relation(fields: [purchase_order_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model purchase_invoices {
+  id                Int       @id @default(autoincrement())
+  code              String?   @unique @db.VarChar(30)
+  purchase_order_id Int?
+  invoice_number    String?   @db.VarChar(50)
+  invoice_date      DateTime? @default(now()) @db.Timestamp(6)
+  total             Decimal?  @db.Decimal(12, 2)
+  currency          String?   @default("USD") @db.VarChar(10)
+  rate              Decimal?  @db.Decimal(12, 4)
+  notes             String?
+
+  purchase_orders purchase_orders? @relation(fields: [purchase_order_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_items  purchase_items[]
+}
+
+model purchase_items {
+  id                  Int       @id @default(autoincrement())
+  code                String?   @unique @db.VarChar(30)
+  purchase_invoice_id Int?
+  product_id          Int?
+  warehouse_id        Int?
+  lot                 String?   @db.VarChar(50)
+  quantity            Decimal?  @db.Decimal(12, 2)
+  price               Decimal?  @db.Decimal(12, 4)
+  subtotal            Decimal?  @db.Decimal(12, 2)
+  created_at          DateTime? @default(now()) @db.Timestamp(6)
+
+  products          products?          @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_invoices purchase_invoices? @relation(fields: [purchase_invoice_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses        warehouses?        @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ======================================
+//  VENTAS (Legacy)
+// ======================================
+model sales {
+  id             Int       @id @default(autoincrement())
+  client_id      Int?
+  invoice_number String?   @unique @db.VarChar(50)
+  date           DateTime? @default(now()) @db.Timestamp(6)
+  total          Decimal?  @db.Decimal(12, 2)
+  currency       String?   @default("USD") @db.VarChar(10)
+  rate           Decimal?  @db.Decimal(12, 4)
+  status         String?   @default("pending") @db.VarChar(20)
+  notes          String?
+
+  clients    clients?     @relation(fields: [client_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sale_items sale_items[]
+}
+
+model sale_items {
+  id         Int       @id @default(autoincrement())
+  sale_id    Int?
+  product_id Int?
+  quantity   Decimal?  @db.Decimal(12, 2)
+  price      Decimal?  @db.Decimal(12, 4)
+  subtotal   Decimal?  @db.Decimal(12, 2)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  products           products?            @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sales              sales?               @relation(fields: [sale_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sale_lot_movements sale_lot_movements[]
+}
+
+model sale_lot_movements {
+  id           Int       @id @default(autoincrement())
+  sale_item_id Int?
+  lot_id       Int?
+  quantity     Decimal?  @db.Decimal(12, 2)
+  cost         Decimal?  @db.Decimal(12, 4)
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+
+  inventory_lots inventory_lots? @relation(fields: [lot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sale_items     sale_items?     @relation(fields: [sale_item_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ======================================
+//  RECEPCIÓN / CALIDAD (Legacy)
+// ======================================
+model receipts {
+  id               Int       @id @default(autoincrement())
+  producer_id      Int?
+  supplier_id      Int?
+  product_id       Int?
+  lot              String?   @db.VarChar(50)
+  weight_gross     Decimal?  @db.Decimal(12, 2)
+  humidity         Decimal?  @db.Decimal(5, 2)
+  impurities       Decimal?  @db.Decimal(5, 2)
+  weight_net       Decimal?  @db.Decimal(12, 2)
+  financed_percent Decimal?  @db.Decimal(5, 2)
+  financed_weight  Decimal?  @db.Decimal(12, 2)
+  free_weight      Decimal?  @db.Decimal(12, 2)
+  price            Decimal?  @db.Decimal(12, 4)
+  price_equivalent Decimal?  @db.Decimal(12, 4)
+  date             DateTime? @default(now()) @db.Timestamp(6)
+  notes            String?
+
+  producers producers? @relation(fields: [producer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  products  products?  @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  suppliers suppliers? @relation(fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  liquidation_receipts   liquidation_receipts[]
+  receipt_quality_photos receipt_quality_photos[]
+  receipt_quality_values receipt_quality_values[]
+}
+
+model quality_parameters {
+  id         Int       @id @default(autoincrement())
+  product_id Int?
+  name       String?   @db.VarChar(120)
+  type       String?   @db.VarChar(30)
+  unit       String?   @db.VarChar(20)
+  min_value  Decimal?  @db.Decimal(10, 2)
+  max_value  Decimal?  @db.Decimal(10, 2)
+  required   Boolean?  @default(true)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  products               products?                @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receipt_quality_values receipt_quality_values[]
+}
+
+model receipt_quality_values {
+  id           Int       @id @default(autoincrement())
+  receipt_id   Int?
+  parameter_id Int?
+  value        Decimal?  @db.Decimal(12, 4)
+  notes        String?
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+
+  quality_parameters quality_parameters? @relation(fields: [parameter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receipts           receipts?           @relation(fields: [receipt_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model receipt_quality_photos {
+  id          Int       @id @default(autoincrement())
+  receipt_id  Int?
+  url         String?
+  description String?
+  uploaded_at DateTime? @default(now()) @db.Timestamp(6)
+
+  receipts receipts? @relation(fields: [receipt_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ======================================
+//  INVENTARIO (Legacy + Integración con ERP nuevo)
+// ======================================
+model inventory_lots {
+  id               Int       @id @default(autoincrement())
+  product_id       Int?
+  lot              String?   @db.VarChar(50)
+  supplier_type    String?   @db.VarChar(20)
+  supplier_id      Int?
+  financed_percent Decimal?  @db.Decimal(5, 2)
+  financed_balance Decimal?  @db.Decimal(12, 2)
+  free_balance     Decimal?  @db.Decimal(12, 2)
+  cost_avg         Decimal?  @db.Decimal(12, 4)
+  created_at       DateTime? @default(now()) @db.Timestamp(6)
+  warehouse_id     Int?
+  total_quantity   Decimal?  @db.Decimal(12, 2)
+  status           String?   @default("active") @db.VarChar(20)
+
+  products            products?             @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses          warehouses?           @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  inventory_movements inventory_movements[]
+  sale_lot_movements  sale_lot_movements[]
+}
+
+model inventory_movements {
+  id           Int  @id @default(autoincrement())
+  lot_id       Int?
+  warehouse_id Int?
+
+  // ✅ FIX: tipado a enum
+  movement_type InventoryMovementType?
+
+  quantity     Decimal?  @db.Decimal(12, 2)
+  cost         Decimal?  @db.Decimal(12, 4)
+  module       String?   @db.VarChar(50)
+  reference_id Int?
+  date         DateTime? @default(now()) @db.Timestamp(6)
+  notes        String?
+
+  inventory_lots inventory_lots? @relation(fields: [lot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses     warehouses?     @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+// ======================================
+//  FINANZAS (ERP nuevo)
+// ======================================
+model FinanceMovement {
+  id                      Int                       @id @default(autoincrement())
+  company                 String?
+  producerId              Int
+  cropPlanId              Int?
+  type                    String                    @db.VarChar(20)
+  amountUsd               Float
+  amountBs                Float
+  rateBcv                 Float
+  description             String?                   @db.VarChar(255)
+  commissionType          String?
+  commissionRate          Float?
+  commissionCurrency      String?
+  documentType            String?                   @db.VarChar(30)
+  documentNumber          String?                   @db.VarChar(50)
+  cycle                   String?                   @db.VarChar(30)
+  status                  String                    @default("ACTIVE") @db.VarChar(20)
+  movementDate            DateTime                  @default(now())
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
+  adminAccountId          Int?
+  adminAccount            AdministrativeAccount?    @relation(fields: [adminAccountId], references: [id])
+  cropPlan                crop_plans?               @relation(fields: [cropPlanId], references: [id])
+  producer                producers                 @relation(fields: [producerId], references: [id])
+  ProducerPaymentSchedule ProducerPaymentSchedule[]
+}
+
+model FinancingCycle {
+  id        Int       @id @default(autoincrement())
+  code      String    @unique @db.VarChar(30)
+  name      String?   @db.VarChar(120)
+  season    String?   @db.VarChar(60)
+  startDate DateTime?
+  endDate   DateTime?
+  status    String    @default("ACTIVE") @db.VarChar(20)
+  notes     String?
+  createdAt DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt DateTime  @updatedAt @db.Timestamp(6)
+}
+
+model AdministrativeAuditLog {
+  id         Int                       @id @default(autoincrement())
+  action     AdministrativeAuditAction
+  entityType String                    @db.VarChar(50)
+  entityId   Int?
+  accountId  Int?
+  userId     Int?
+  userEmail  String?                   @db.VarChar(150)
+  metadata   Json?
+  createdAt  DateTime                  @default(now()) @db.Timestamp(6)
+}
+
+model AdministrativeAccount {
+  id        Int                       @id @default(autoincrement())
+  name      String
+  currency  Currency
+  type      AdministrativeAccountType
+  balance   Float                     @default(0)
+  active    Boolean                   @default(true)
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+
+  movements               AdministrativeMovement[]
+  fromTransfers           AdministrativeTransfer[]  @relation("FromAccount")
+  toTransfers             AdministrativeTransfer[]  @relation("ToAccount")
+  financeMovements        FinanceMovement[]
+  ProducerPaymentSchedule ProducerPaymentSchedule[]
+  SalePayment             SalePayment[]
+}
+
+model AdministrativeMovement {
+  id           Int                        @id @default(autoincrement())
+  accountId    Int
+  type         AdministrativeMovementType
+  amount       Float
+  description  String?
+  movementDate DateTime                   @default(now())
+  transferId   Int?
+  createdAt    DateTime                   @default(now())
+
+  account  AdministrativeAccount   @relation(fields: [accountId], references: [id])
+  transfer AdministrativeTransfer? @relation(fields: [transferId], references: [id])
+}
+
+model AdministrativeTransfer {
+  id            Int      @id @default(autoincrement())
+  fromAccountId Int
+  toAccountId   Int
+  amount        Float
+  description   String?
+  transferDate  DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  movements   AdministrativeMovement[]
+  fromAccount AdministrativeAccount    @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount   AdministrativeAccount    @relation("ToAccount", fields: [toAccountId], references: [id])
+}
+
+model ProducerPaymentSchedule {
+  id                Int      @id @default(autoincrement())
+  producerId        Int
+  cycle             String?  @db.VarChar(30)
+  company           String?  @db.VarChar(30)
+  amountUsd         Float
+  scheduledDate     DateTime
+  status            String   @default("PENDING") @db.VarChar(20)
+  adminAccountId    Int?
+  financeMovementId Int?
+  notes             String?  @db.VarChar(255)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  adminAccount    AdministrativeAccount? @relation(fields: [adminAccountId], references: [id])
+  financeMovement FinanceMovement?       @relation(fields: [financeMovementId], references: [id])
+  producer        producers              @relation(fields: [producerId], references: [id])
+}
+
+// ======================================
+//  PLAN DE FINANCIAMIENTO (ERP nuevo)
+// ======================================
+model FinancingPlan {
+  id            Int      @id @default(autoincrement())
+  producerId    Int
+  cropPlanId    Int?
+  company       String?  @db.VarChar(30)
+  season        String?  @db.VarChar(50)
+  description   String?  @db.VarChar(255)
+  totalCost     Decimal? @db.Decimal(12, 2)
+  totalPrice    Decimal? @db.Decimal(12, 2)
+  totalFinanced Decimal? @db.Decimal(12, 2)
+  createdAt     DateTime @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime @updatedAt @db.Timestamp(6)
+
+  items    FinancedItem[]
+  cropPlan crop_plans?    @relation("CropPlanFinancingPlans", fields: [cropPlanId], references: [id])
+  producer producers      @relation(fields: [producerId], references: [id])
+}
+
+model FinancedItem {
+  id               Int      @id @default(autoincrement())
+  financingPlanId  Int?
+  supplierId       Int?
+  name             String
+  unit             String?
+  quantity         Decimal
+  unitCost         Decimal
+  unitPrice        Decimal
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  category         String
+  cropPlanId       Int?
+  cycleId          Int
+  financingPercent Decimal  @default(100.00)
+  inventoryItemId  Int?
+  metadata         Json?
+  producerId       Int?
+  rateBcv          Decimal
+  suppliersId      Int?
+
+  FinancingPlan FinancingPlan? @relation(fields: [financingPlanId], references: [id])
+  suppliers     suppliers?     @relation(fields: [suppliersId], references: [id])
+
+  inventoryItem InventoryItem? @relation("InventoryItemFinancedItems", fields: [inventoryItemId], references: [id])
+}
+
+model CycleExtraCost {
+  id          Int       @id @default(autoincrement())
+  cycleId     Int
+  type        String
+  description String
+  amountUsd   Decimal?
+  amountBs    Decimal?
+  rateBcv     Decimal
+  supplierId  Int?
+  cropPlanId  Int?
+  occurredAt  DateTime?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// ======================================
+//  INVENTARIO (ERP nuevo) - InventoryItem
+// ======================================
+model InventoryItem {
+  id       Int    @id @default(autoincrement())
+  code     String @unique @db.VarChar(60)
+  name     String @db.VarChar(150)
+  category String @db.VarChar(30)
+  unit     String @db.VarChar(20)
+
+  stockQty     Decimal @default(0) @db.Decimal(14, 2)
+  reservedQty  Decimal @default(0) @db.Decimal(14, 2)
+  avgCostUsd   Decimal @default(0) @db.Decimal(14, 4)
+  totalCostUsd Decimal @default(0) @db.Decimal(16, 2)
+
+  company   String?  @db.VarChar(20)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  financedItems   FinancedItem[]    @relation("InventoryItemFinancedItems")
+  priceListItems  PriceListItem[]
+  SaleInvoiceItem SaleInvoiceItem[]
+}
+
+// ======================================
+//  CÓDIGOS / SECUENCIAS
+// ======================================
+model CodeSequence {
+  id           Int             @id @default(autoincrement())
+  key          String          @unique
+  description  String?
+  prefix       String?
+  padding      Int             @default(6)
+  currentValue Int             @default(0)
+  suffix       String?
+  resetPolicy  CodeResetPolicy @default(NEVER)
+  lastResetAt  DateTime?
+  isActive     Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ======================================
+//  AGRO HOUSES (ERP nuevo)
+// ======================================
+model AgroHouse {
+  id        Int      @id @default(autoincrement())
+  code      String?  @unique @db.VarChar(30)
+  name      String
+  rif       String?  @unique
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attachments  AgroHouseAttachment[]
+  bankAccounts AgroHouseBankAccount[]
+  payments     AgroHousePayment[]
+  purchases    PurchaseInvoice[]
+}
+
+model PurchaseInvoice {
+  id            Int      @id @default(autoincrement())
+  code          String?  @unique @db.VarChar(30)
+  agroHouseId   Int
+  cycleId       Int
+  invoiceNumber String
+  invoiceDate   DateTime
+  currency      String
+  totalAmount   Float
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments    AgroHousePayment[]
+  agroHouse   AgroHouse                   @relation(fields: [agroHouseId], references: [id])
+  attachments PurchaseInvoiceAttachment[]
+  items       PurchaseItem[]
+}
+
+model PurchaseItem {
+  id                Int             @id @default(autoincrement())
+  code              String?         @unique @db.VarChar(30)
+  purchaseInvoiceId Int
+  description       String
+  quantity          Float
+  unit              String?
+  unitPrice         Float
+  total             Float
+  productId         Int?
+  product           products?       @relation(fields: [productId], references: [id])
+  purchaseInvoice   PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+}
+
+model AgroHousePayment {
+  id                Int      @id @default(autoincrement())
+  code              String?  @unique @db.VarChar(30)
+  agroHouseId       Int
+  purchaseInvoiceId Int?
+  cycleId           Int
+  paymentDate       DateTime
+  amountUsd         Float
+  method            String?
+  reference         String?
+
+  agroHouse       AgroHouse        @relation(fields: [agroHouseId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+}
+
+model AgroHouseBankAccount {
+  id            Int      @id @default(autoincrement())
+  agroHouseId   Int
+  bankName      String
+  accountNumber String
+  accountType   String?
+  currency      String?
+  holderName    String?
+  holderId      String?
+  isPrimary     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  agroHouse AgroHouse @relation(fields: [agroHouseId], references: [id])
+}
+
+model AgroHouseAttachment {
+  id          Int      @id @default(autoincrement())
+  code        String?  @unique @db.VarChar(30)
+  agroHouseId Int
+  category    String?
+  fileName    String
+  fileType    String?
+  url         String
+  description String?
+  uploadedAt  DateTime @default(now())
+
+  agroHouse AgroHouse @relation(fields: [agroHouseId], references: [id])
+}
+
+model PurchaseInvoiceAttachment {
+  id                Int      @id @default(autoincrement())
+  code              String?  @unique @db.VarChar(30)
+  purchaseInvoiceId Int
+  fileName          String
+  fileType          String?
+  url               String
+  category          String?
+  description       String?
+  uploadedAt        DateTime @default(now())
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+}
+
+model UserWarehouseAccess {
+  id          Int @id @default(autoincrement())
+  userId      Int
+  warehouseId Int
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse warehouses @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, warehouseId])
+  @@map("user_warehouse_access")
+}
+
+model UserProducerAccess {
+  id         Int @id @default(autoincrement())
+  userId     Int
+  producerId Int
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  producer producers @relation(fields: [producerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, producerId])
+  @@map("user_producer_access")
+}
+
+// ✅ Company: como hoy lo tienes en String en varios modelos,
+// aquí lo manejamos como string "CAD" | "SILO_AMAZO" sin migrar columnas aún.
+model UserCompanyAccess {
+  id      Int    @id @default(autoincrement())
+  userId  Int
+  company String @db.VarChar(30)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, company])
+  @@map("user_company_access")
+}
+
+// ======================================
+//  VENTAS (ERP nuevo)
+// ======================================
+enum SaleType {
+  LOCAL
+  EXPORTACION
+}
+
+enum SaleDocumentType {
+  PROFORMA
+  FACTURA
+  NOTA_ENTREGA
+}
+
+enum SaleStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum SalePartyType {
+  CLIENT
+  PRODUCER
+}
+
+enum SalePaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+}
+
+enum SalePaymentMethod {
+  CASH
+  BANK
+  TRANSFER
+  OTHER
+
+  // pago con cosecha / liquidación
+  IN_KIND
+}
+
+model SaleInvoice {
+  id       Int      @id @default(autoincrement())
+  code     String?  @unique @db.VarChar(30) // V-2026-000001
+  saleDate DateTime @default(now()) @db.Timestamp(6)
+
+  // IVA (aplica al total)
+  applyVat Boolean @default(false)
+  vatRate  Decimal @default(0) @db.Decimal(8, 2)
+  vatUsd   Decimal @default(0) @db.Decimal(16, 2)
+
+  type         SaleType         @default(LOCAL)
+  documentType SaleDocumentType @default(FACTURA)
+  status       SaleStatus       @default(DRAFT)
+
+  // a quién se le vende (cliente normal o productor)
+  partyType  SalePartyType @default(CLIENT)
+  clientId   Int?
+  producerId Int?
+
+  // para ventas a productor (crédito por insumos)
+  isCredit    Boolean   @default(false)
+  creditNotes String?
+  dueDate     DateTime?
+
+  // multi-empresa (manteniendo tu patrón actual String)
+  company String? @db.VarChar(20) // "CAD" | "SILO_AMAZO"
+
+  // moneda / tasa
+  currency Currency @default(USD)
+  rateBcv  Decimal? @db.Decimal(14, 4)
+
+  priceListId Int?
+  priceList   PriceList? @relation(fields: [priceListId], references: [id])
+
+  // totales
+  subtotalUsd Decimal @default(0) @db.Decimal(16, 2)
+  totalUsd    Decimal @default(0) @db.Decimal(16, 2)
+
+  paymentStatus SalePaymentStatus @default(PENDING)
+
+  notes     String?
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @updatedAt @db.Timestamp(6)
+
+  // totales en Bs (si currency=VES o si quieres guardar equivalencia)
+  subtotalBs Decimal @default(0) @db.Decimal(16, 2)
+  vatBs      Decimal @default(0) @db.Decimal(16, 2)
+  totalBs    Decimal @default(0) @db.Decimal(16, 2)
+
+  createdById   Int?
+  confirmedById Int?
+  confirmedAt   DateTime?
+
+  createdBy   User? @relation("SaleCreatedBy", fields: [createdById], references: [id])
+  confirmedBy User? @relation("SaleConfirmedBy", fields: [confirmedById], references: [id])
+
+  deliveryAddress String?
+  deliveryNotes   String?
+
+  discountPct Decimal @default(0) @db.Decimal(8, 2)
+  discountUsd Decimal @default(0) @db.Decimal(16, 2)
+
+  // relations
+  client   clients?          @relation(fields: [clientId], references: [id])
+  producer producers?        @relation(fields: [producerId], references: [id])
+  items    SaleInvoiceItem[]
+  payments SalePayment[]
+
+  @@index([saleDate])
+  @@index([status])
+  @@index([partyType])
+  @@index([clientId])
+  @@index([producerId])
+  @@map("sale_invoices")
+}
+
+model SaleInvoiceItem {
+  id              Int @id @default(autoincrement())
+  saleInvoiceId   Int
+  inventoryItemId Int
+
+  description String? @db.VarChar(255)
+  quantity    Decimal @db.Decimal(14, 2)
+  unit        String? @db.VarChar(20)
+
+  unitPriceUsd Decimal @db.Decimal(14, 4)
+  subtotalUsd  Decimal @db.Decimal(16, 2)
+
+  inventoryCodeAtSale String? @db.VarChar(60)
+  inventoryNameAtSale String? @db.VarChar(150)
+  unitAtSale          String? @db.VarChar(20)
+
+  // costo congelado al momento de confirmar
+  avgCostUsdAtSale Decimal? @db.Decimal(14, 4)
+  costTotalUsd     Decimal? @db.Decimal(16, 2)
+  marginUsd        Decimal? @db.Decimal(16, 2)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+
+  saleInvoice   SaleInvoice   @relation(fields: [saleInvoiceId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  priceListItemId Int?
+  priceSource     String? @db.VarChar(30) // "PRICE_LIST_FIXED" | "PRICE_LIST_MARGIN" | "MANUAL"
+
+  priceListItem PriceListItem? @relation(fields: [priceListItemId], references: [id])
+
+  @@index([saleInvoiceId])
+  @@index([inventoryItemId])
+  @@map("sale_invoice_items")
+}
+
+model SalePayment {
+  id            Int               @id @default(autoincrement())
+  saleInvoiceId Int
+  paymentDate   DateTime          @default(now())
+  amountUsd     Decimal           @db.Decimal(16, 2)
+  method        SalePaymentMethod @default(TRANSFER)
+  reference     String?           @db.VarChar(80)
+  notes         String?
+
+  // opcional: si entra a caja/banco del admin
+  adminAccountId Int?
+  adminAccount   AdministrativeAccount? @relation(fields: [adminAccountId], references: [id])
+
+  saleInvoice SaleInvoice @relation(fields: [saleInvoiceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([saleInvoiceId])
+  @@index([paymentDate])
+  @@map("sale_payments")
+}
+
+// ======================================
+//  PRICING (ERP nuevo)
+// ======================================
+enum PriceItemMode {
+  FIXED
+  MARGIN_OVER_COST
+}
+
+model PriceList {
+  id       Int      @id @default(autoincrement())
+  code     String   @unique @db.VarChar(30) // ej: CAD-MAY, CAD-RET, SILO-MAY
+  name     String   @db.VarChar(120)
+  company  String?  @db.VarChar(20) // "CAD" | "SILO_AMAZO"
+  currency Currency @default(USD)
+
+  isDefault Boolean @default(false)
+  active    Boolean @default(true)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items       PriceListItem[]
+  SaleInvoice SaleInvoice[]
+}
+
+model PriceListItem {
+  id              Int @id @default(autoincrement())
+  priceListId     Int
+  inventoryItemId Int
+
+  mode PriceItemMode @default(MARGIN_OVER_COST)
+
+  fixedPriceUsd Decimal? @db.Decimal(14, 4)
+  marginPct     Decimal? @db.Decimal(8, 2)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  priceList     PriceList     @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  // ✅ Back relation requerido por Prisma
+  saleInvoiceItems SaleInvoiceItem[]
+
+  @@unique([priceListId, inventoryItemId])
+  @@index([priceListId])
+  @@index([inventoryItemId])
+  @@map("price_list_items")
+}
+
+model ExchangeRate {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @db.Date
+  rate      Decimal  @db.Decimal(18, 6)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([date])
+  @@map("exchange_rates")
+}
