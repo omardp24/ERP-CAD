@@ -1,5 +1,12 @@
 // src/sales/dto/add-sale-item.dto.ts
-import { IsInt, IsNumber, IsOptional, IsPositive, IsString, Min } from 'class-validator';
+import {
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsPositive,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class AddSaleItemDto {
   @IsInt()
@@ -9,10 +16,11 @@ export class AddSaleItemDto {
   @IsPositive()
   quantity: number;
 
-  // En ventas usamos USD como base (aunque el documento sea VES, luego aplicas rate/iva)
+  // ✅ Opcional: si no viene, el backend lo calcula desde la lista de precios
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  unitPriceUsd: number;
+  unitPriceUsd?: number;
 
   @IsOptional()
   @IsString()

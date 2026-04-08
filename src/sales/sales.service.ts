@@ -22,7 +22,6 @@ function round2(n: number) {
 
 function toNum(x: any): number {
   if (x === null || x === undefined) return 0;
-  // Prisma Decimal
   if (typeof x === 'object' && typeof x.toNumber === 'function') return x.toNumber();
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
@@ -119,22 +118,15 @@ export class SalesService {
     const partyType = (dtoAny.partyType || 'CLIENT') as any;
 
     if (partyType === 'CLIENT' && !dtoAny.clientId) {
-      throw new BadRequestException(
-        'clientId es requerido cuando partyType=CLIENT',
-      );
+      throw new BadRequestException('clientId es requerido cuando partyType=CLIENT');
     }
     if (partyType === 'PRODUCER' && !dtoAny.producerId) {
-      throw new BadRequestException(
-        'producerId es requerido cuando partyType=PRODUCER',
-      );
+      throw new BadRequestException('producerId es requerido cuando partyType=PRODUCER');
     }
 
     const saleDate = dtoAny.saleDate ? new Date(dtoAny.saleDate) : new Date();
-
-    // company viene como dto.companyCode en tu front (yo lo guardo en "company")
     const company = dtoAny.companyCode ?? dtoAny.company ?? null;
 
-    // priceListId: si no viene, intentamos usar default de esa company
     let priceListId: number | null = dtoAny.priceListId ?? null;
     if (!priceListId && company) {
       const def = await this.prisma.priceList.findFirst({
@@ -144,7 +136,6 @@ export class SalesService {
       if (def) priceListId = def.id;
     }
 
-    // ✅ code por tipo usando tu wrapper (SALE_FV / SALE_PR / SALE_NE)
     const documentType = ((dto.documentType as any) || 'FACTURA') as any;
     const code = await this.codesService.nextSaleCode(documentType);
 
@@ -158,26 +149,19 @@ export class SalesService {
         type: (dtoAny.type as any) || 'LOCAL',
         documentType,
         status: 'DRAFT',
-
         partyType,
         clientId: dtoAny.clientId ?? null,
         producerId: dtoAny.producerId ?? null,
-
         isCredit: dtoAny.isCredit ?? false,
         creditNotes: dtoAny.creditNotes ?? null,
         dueDate: dtoAny.dueDate ? new Date(dtoAny.dueDate) : null,
-
         company,
-
         currency: (dtoAny.currency as any) || 'USD',
         rateBcv: dtoAny.rateBcv != null ? new Prisma.Decimal(dtoAny.rateBcv) : null,
-
         applyVat,
         vatRate: new Prisma.Decimal(vatRate),
         vatUsd: new Prisma.Decimal(0),
-
         notes: dtoAny.notes ?? null,
-
         priceListId: priceListId ?? null,
       } as any,
     });
@@ -186,24 +170,17 @@ export class SalesService {
     return this.getById(sale.id);
   }
 
-  // ===== ADD ITEM (pricing: calcula unitPrice por priceList) =====
+  // ===== ADD ITEM =====
   async addItem(saleId: number, dto: AddSaleItemDto) {
-    const sale = await this.prisma.saleInvoice.findUnique({
-      where: { id: saleId },
-    });
+    const sale = await this.prisma.saleInvoice.findUnique({ where: { id: saleId } });
     if (!sale) throw new NotFoundException('Venta no encontrada');
     if (sale.status !== 'DRAFT') {
-      throw new BadRequestException(
-        'Solo puedes agregar items cuando la venta está en DRAFT',
-      );
+      throw new BadRequestException('Solo puedes agregar items cuando la venta está en DRAFT');
     }
 
-    const inv = await this.prisma.inventoryItem.findUnique({
-      where: { id: dto.inventoryItemId },
-    });
+    const inv = await this.prisma.inventoryItem.findUnique({ where: { id: dto.inventoryItemId } });
     if (!inv) throw new NotFoundException('InventoryItem no encontrado');
 
-    // available = stock - reserved
     const stock = Number(inv.stockQty);
     const reserved = Number(inv.reservedQty);
     const available = stock - reserved;
@@ -214,10 +191,9 @@ export class SalesService {
       );
     }
 
-    // ✅ resolver precio por price list
     if (!sale.priceListId) {
       throw new BadRequestException(
-        'La venta no tiene priceListId. Debes seleccionar una lista de precios (o definir una default por empresa).',
+        'La venta no tiene priceListId. Debes seleccionar una lista de precios.',
       );
     }
 
@@ -249,26 +225,19 @@ export class SalesService {
 
   // ===== REMOVE ITEM =====
   async removeItem(saleId: number, itemId: number) {
-    const sale = await this.prisma.saleInvoice.findUnique({
-      where: { id: saleId },
-    });
+    const sale = await this.prisma.saleInvoice.findUnique({ where: { id: saleId } });
     if (!sale) throw new NotFoundException('Venta no encontrada');
     if (sale.status !== 'DRAFT') {
-      throw new BadRequestException(
-        'Solo puedes borrar items cuando la venta está en DRAFT',
-      );
+      throw new BadRequestException('Solo puedes borrar items cuando la venta está en DRAFT');
     }
 
-    const item = await this.prisma.saleInvoiceItem.findUnique({
-      where: { id: itemId },
-    });
+    const item = await this.prisma.saleInvoiceItem.findUnique({ where: { id: itemId } });
     if (!item || item.saleInvoiceId !== saleId) {
       throw new NotFoundException('Item no encontrado');
     }
 
     await this.prisma.saleInvoiceItem.delete({ where: { id: itemId } });
     await this.recalcTotalsWithVat(saleId);
-
     return this.getById(saleId);
   }
 
@@ -285,10 +254,8 @@ export class SalesService {
       throw new BadRequestException('Solo puedes editar una venta en DRAFT');
     }
 
-    // Si el frontend manda companyCode, lo traducimos a "company"
     const company = dtoAny.companyCode ?? dtoAny.company;
 
-    // Si cambian priceListId, validamos
     if (dtoAny.priceListId !== undefined) {
       if (dtoAny.priceListId) {
         const exists = await this.prisma.priceList.findUnique({
@@ -299,62 +266,37 @@ export class SalesService {
       }
     }
 
-    // si cambian partyType, validamos ids (igual a create)
     const partyType = (dtoAny.partyType as any) ?? sale.partyType;
 
     if (partyType === 'CLIENT' && dtoAny.clientId === null) {
-      throw new BadRequestException(
-        'clientId es requerido cuando partyType=CLIENT',
-      );
+      throw new BadRequestException('clientId es requerido cuando partyType=CLIENT');
     }
     if (partyType === 'PRODUCER' && dtoAny.producerId === null) {
-      throw new BadRequestException(
-        'producerId es requerido cuando partyType=PRODUCER',
-      );
+      throw new BadRequestException('producerId es requerido cuando partyType=PRODUCER');
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1) actualizar cabecera (SIN exigir rateBcv en draft)
       await tx.saleInvoice.update({
         where: { id: saleId },
         data: {
           saleDate: dtoAny.saleDate ? new Date(dtoAny.saleDate) : undefined,
           type: dtoAny.type != null ? (dtoAny.type as any) : undefined,
-          documentType:
-            dtoAny.documentType != null ? (dtoAny.documentType as any) : undefined,
-
-          partyType:
-            dtoAny.partyType != null ? (dtoAny.partyType as any) : undefined,
+          documentType: dtoAny.documentType != null ? (dtoAny.documentType as any) : undefined,
+          partyType: dtoAny.partyType != null ? (dtoAny.partyType as any) : undefined,
           clientId: dtoAny.clientId !== undefined ? dtoAny.clientId : undefined,
-          producerId:
-            dtoAny.producerId !== undefined ? dtoAny.producerId : undefined,
-
+          producerId: dtoAny.producerId !== undefined ? dtoAny.producerId : undefined,
           isCredit: dtoAny.isCredit !== undefined ? dtoAny.isCredit : undefined,
-          creditNotes:
-            dtoAny.creditNotes !== undefined ? dtoAny.creditNotes : undefined,
+          creditNotes: dtoAny.creditNotes !== undefined ? dtoAny.creditNotes : undefined,
           dueDate:
             dtoAny.dueDate !== undefined
-              ? dtoAny.dueDate
-                ? new Date(dtoAny.dueDate)
-                : null
+              ? dtoAny.dueDate ? new Date(dtoAny.dueDate) : null
               : undefined,
-
           company: company !== undefined ? (company ?? null) : undefined,
           currency: dtoAny.currency != null ? (dtoAny.currency as any) : undefined,
           notes: dtoAny.notes !== undefined ? dtoAny.notes : undefined,
-
-          priceListId:
-            dtoAny.priceListId !== undefined ? (dtoAny.priceListId ?? null) : undefined,
-
-          // IVA en cabecera
-          applyVat:
-            dtoAny.applyVat !== undefined ? Boolean(dtoAny.applyVat) : undefined,
-          vatRate:
-            dtoAny.vatRate !== undefined
-              ? new Prisma.Decimal(dtoAny.vatRate ?? 0)
-              : undefined,
-
-          // BCV (draft: puede ser null sin romper)
+          priceListId: dtoAny.priceListId !== undefined ? (dtoAny.priceListId ?? null) : undefined,
+          applyVat: dtoAny.applyVat !== undefined ? Boolean(dtoAny.applyVat) : undefined,
+          vatRate: dtoAny.vatRate !== undefined ? new Prisma.Decimal(dtoAny.vatRate ?? 0) : undefined,
           rateBcv:
             dtoAny.rateBcv !== undefined
               ? dtoAny.rateBcv != null && Number(dtoAny.rateBcv) > 0
@@ -364,7 +306,6 @@ export class SalesService {
         } as any,
       });
 
-      // 2) sincronizar items si vienen en dto
       const incoming = dtoAny.items as
         | Array<{
             id?: number;
@@ -372,7 +313,7 @@ export class SalesService {
             description?: string | null;
             quantity: number;
             unit?: string | null;
-            unitPriceUsd?: number; // editable opcional
+            unitPriceUsd?: number;
           }>
         | undefined;
 
@@ -387,45 +328,27 @@ export class SalesService {
         });
 
         for (const it of incoming) {
-          const inv = await tx.inventoryItem.findUnique({
-            where: { id: it.inventoryItemId },
-          });
+          const inv = await tx.inventoryItem.findUnique({ where: { id: it.inventoryItemId } });
           if (!inv)
-            throw new BadRequestException(
-              `InventoryItem ${it.inventoryItemId} no existe`,
-            );
+            throw new BadRequestException(`InventoryItem ${it.inventoryItemId} no existe`);
 
-          const stock = Number(inv.stockQty);
-          const reserved = Number(inv.reservedQty);
-          const available = stock - reserved;
-
+          const available = Number(inv.stockQty) - Number(inv.reservedQty);
           if (Number(it.quantity) > available) {
             throw new BadRequestException(
               `Stock insuficiente para ${inv.code}. Disponible: ${available} ${inv.unit}`,
             );
           }
 
-          // precio: manual si viene, si no resolver por priceList
           let unitPriceUsd: number;
-
           if (it.unitPriceUsd != null) {
             unitPriceUsd = Number(it.unitPriceUsd);
-            if (unitPriceUsd < 0)
-              throw new BadRequestException('unitPriceUsd inválido');
+            if (unitPriceUsd < 0) throw new BadRequestException('unitPriceUsd inválido');
           } else {
-            const priceListIdToUse = (dtoAny.priceListId ??
-              sale.priceListId) as number | null;
-
+            const priceListIdToUse = (dtoAny.priceListId ?? sale.priceListId) as number | null;
             if (!priceListIdToUse) {
-              throw new BadRequestException(
-                'La venta no tiene priceListId. Selecciona lista de precios.',
-              );
+              throw new BadRequestException('La venta no tiene priceListId. Selecciona lista de precios.');
             }
-
-            const resolved = await this.pricingService.resolveUnitPriceUsd(
-              priceListIdToUse,
-              it.inventoryItemId,
-            );
+            const resolved = await this.pricingService.resolveUnitPriceUsd(priceListIdToUse, it.inventoryItemId);
             unitPriceUsd = resolved.unitPriceUsd;
           }
 
@@ -459,9 +382,7 @@ export class SalesService {
         }
       }
 
-      // 3) recalcular totales con IVA (y Bs si aplica y hay tasa)
       await this.recalcTotalsWithVatTx(tx, saleId);
-
       return this.getById(saleId);
     });
   }
@@ -486,19 +407,13 @@ export class SalesService {
       let subtotalUsd = 0;
 
       for (const it of sale.items) {
-        const inv = await tx.inventoryItem.findUnique({
-          where: { id: it.inventoryItemId },
-        });
+        const inv = await tx.inventoryItem.findUnique({ where: { id: it.inventoryItemId } });
         if (!inv)
-          throw new BadRequestException(
-            `InventoryItem ${it.inventoryItemId} no existe`,
-          );
+          throw new BadRequestException(`InventoryItem ${it.inventoryItemId} no existe`);
 
-        const stock = Number(inv.stockQty);
-        const reserved = Number(inv.reservedQty);
-        const available = stock - reserved;
-
+        const available = Number(inv.stockQty) - Number(inv.reservedQty);
         const qty = Number(it.quantity);
+
         if (qty > available) {
           throw new BadRequestException(
             `Stock insuficiente al confirmar para item ${inv.code}. Disponible: ${available} ${inv.unit}`,
@@ -523,7 +438,7 @@ export class SalesService {
           },
         });
 
-        const newStock = round2(stock - qty);
+        const newStock = round2(Number(inv.stockQty) - qty);
         const newTotalCost = round2(Number(inv.totalCostUsd) - costTotal);
 
         await tx.inventoryItem.update({
@@ -536,8 +451,6 @@ export class SalesService {
       }
 
       subtotalUsd = round2(subtotalUsd);
-
-      // IVA en total (cabecera)
       const applyVat = Boolean(sale.applyVat);
       const vatRate = Number(sale.vatRate ?? 0);
       const vatUsd = applyVat ? round2(subtotalUsd * (vatRate / 100)) : 0;
@@ -550,22 +463,13 @@ export class SalesService {
           subtotalUsd: new Prisma.Decimal(subtotalUsd),
           vatUsd: new Prisma.Decimal(vatUsd),
           totalUsd: new Prisma.Decimal(totalUsd),
-          rateBcv:
-            dto.rateBcv != null
-              ? new Prisma.Decimal(dto.rateBcv)
-              : sale.rateBcv,
+          rateBcv: dto.rateBcv != null ? new Prisma.Decimal(dto.rateBcv) : sale.rateBcv,
           paymentStatus: 'PENDING',
         } as any,
       });
 
-      // Si es crédito a productor: crear movimiento de finanzas
-      if (
-        updated.partyType === 'PRODUCER' &&
-        updated.producerId &&
-        updated.isCredit
-      ) {
+      if (updated.partyType === 'PRODUCER' && updated.producerId && updated.isCredit) {
         const rate = Number(dto.rateBcv || updated.rateBcv || 0);
-
         await tx.financeMovement.create({
           data: {
             company: updated.company ?? null,
@@ -573,8 +477,7 @@ export class SalesService {
             cropPlanId: null,
             type: 'SUPPLY_INVOICE',
             amountUsd: totalUsd,
-            amountBs:
-              updated.currency === 'VES' && rate > 0 ? round2(totalUsd * rate) : 0,
+            amountBs: updated.currency === 'VES' && rate > 0 ? round2(totalUsd * rate) : 0,
             rateBcv: updated.currency === 'VES' && rate > 0 ? rate : 0,
             description: `Factura de insumos a crédito (${updated.code || 'SIN-CODIGO'})`,
             status: 'ACTIVE',
@@ -590,22 +493,46 @@ export class SalesService {
     });
   }
 
-  // ===== CANCEL =====
+  // ===== CANCEL (DRAFT o CONFIRMED) =====
   async cancel(saleId: number) {
-    const sale = await this.prisma.saleInvoice.findUnique({
-      where: { id: saleId },
-    });
-    if (!sale) throw new NotFoundException('Venta no encontrada');
-    if (sale.status !== 'DRAFT') {
-      throw new BadRequestException('Solo puedes cancelar si está en DRAFT');
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const sale = await tx.saleInvoice.findUnique({
+        where: { id: saleId },
+        include: { items: true, payments: true },
+      });
+      if (!sale) throw new NotFoundException('Venta no encontrada');
+      if (sale.status === 'CANCELLED')
+        throw new BadRequestException('La venta ya está cancelada');
 
-    await this.prisma.saleInvoice.update({
-      where: { id: saleId },
-      data: { status: 'CANCELLED' },
-    });
+      // Si estaba CONFIRMED: devolver stock al inventario
+      if (sale.status === 'CONFIRMED') {
+        for (const it of sale.items) {
+          const qty = Number(it.quantity);
+          const avgCost = Number(it.avgCostUsdAtSale ?? it.unitPriceUsd);
 
-    return this.getById(saleId);
+          const inv = await tx.inventoryItem.findUnique({ where: { id: it.inventoryItemId } });
+          if (!inv) continue;
+
+          const newStock = round2(Number(inv.stockQty) + qty);
+          const newTotalCost = round2(Number(inv.totalCostUsd) + qty * avgCost);
+
+          await tx.inventoryItem.update({
+            where: { id: inv.id },
+            data: {
+              stockQty: dec(newStock),
+              totalCostUsd: dec(newTotalCost),
+            },
+          });
+        }
+      }
+
+      await tx.saleInvoice.update({
+        where: { id: saleId },
+        data: { status: 'CANCELLED' },
+      });
+
+      return this.getById(saleId);
+    });
   }
 
   // ===== ADD PAYMENT =====
@@ -617,9 +544,7 @@ export class SalesService {
       });
       if (!sale) throw new NotFoundException('Venta no encontrada');
       if (sale.status !== 'CONFIRMED') {
-        throw new BadRequestException(
-          'Solo puedes registrar pagos cuando la venta está CONFIRMED',
-        );
+        throw new BadRequestException('Solo puedes registrar pagos cuando la venta está CONFIRMED');
       }
 
       await tx.salePayment.create({
@@ -633,9 +558,7 @@ export class SalesService {
         },
       });
 
-      const payments = await tx.salePayment.findMany({
-        where: { saleInvoiceId: saleId },
-      });
+      const payments = await tx.salePayment.findMany({ where: { saleInvoiceId: saleId } });
       const paid = payments.reduce((acc, p) => acc + Number(p.amountUsd), 0);
       const total = Number(sale.totalUsd);
 
@@ -652,14 +575,76 @@ export class SalesService {
     });
   }
 
-  // ✅ Totales + IVA al total + Bs si aplica (NO rompe si no hay tasa)
+  // ===== REPORTS =====
+  async getReport(params: { from?: string; to?: string; company?: string }) {
+    const where: Prisma.SaleInvoiceWhereInput = { status: 'CONFIRMED' };
+
+    if (params.company) where.company = params.company;
+    if (params.from || params.to) {
+      where.saleDate = {};
+      if (params.from) (where.saleDate as any).gte = new Date(params.from);
+      if (params.to) (where.saleDate as any).lte = new Date(params.to);
+    }
+
+    const invoices = await this.prisma.saleInvoice.findMany({
+      where,
+      include: { items: true, payments: true, client: true, producer: true },
+    });
+
+    const totalVentasUsd = round2(invoices.reduce((acc, s) => acc + Number(s.totalUsd), 0));
+    const totalCobradoUsd = round2(
+      invoices.reduce((acc, s) => acc + s.payments.reduce((a, p) => a + Number(p.amountUsd), 0), 0),
+    );
+    const totalPendienteUsd = round2(totalVentasUsd - totalCobradoUsd);
+    const totalMargenUsd = round2(
+      invoices.reduce((acc, s) => acc + s.items.reduce((a, it) => a + Number(it.marginUsd ?? 0), 0), 0),
+    );
+
+    const porEstadoPago = {
+      PAID: invoices.filter((s) => s.paymentStatus === 'PAID').length,
+      PARTIAL: invoices.filter((s) => s.paymentStatus === 'PARTIAL').length,
+      PENDING: invoices.filter((s) => s.paymentStatus === 'PENDING').length,
+    };
+
+    const clientMap: Record<string, { name: string; totalUsd: number }> = {};
+    for (const s of invoices) {
+      if (s.partyType !== 'CLIENT' || !s.clientId) continue;
+      const key = String(s.clientId);
+      if (!clientMap[key]) clientMap[key] = { name: s.client?.name ?? 'Sin nombre', totalUsd: 0 };
+      clientMap[key].totalUsd = round2(clientMap[key].totalUsd + Number(s.totalUsd));
+    }
+    const topClientes = Object.values(clientMap)
+      .sort((a, b) => b.totalUsd - a.totalUsd)
+      .slice(0, 5);
+
+    const porMes: Record<string, number> = {};
+    for (const s of invoices) {
+      const key = s.saleDate.toISOString().slice(0, 7);
+      porMes[key] = round2((porMes[key] ?? 0) + Number(s.totalUsd));
+    }
+    const ventasPorMes = Object.entries(porMes)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([mes, totalUsd]) => ({ mes, totalUsd }));
+
+    return {
+      totalFacturas: invoices.length,
+      totalVentasUsd,
+      totalCobradoUsd,
+      totalPendienteUsd,
+      totalMargenUsd,
+      porEstadoPago,
+      topClientes,
+      ventasPorMes,
+    };
+  }
+
+  // ===== PRIVATE: recalcular totales =====
   private async recalcTotalsWithVat(saleId: number) {
     return this.prisma.$transaction(async (tx) => {
       await this.recalcTotalsWithVatTx(tx, saleId);
     });
   }
 
-  // ✅ Misma función pero reusada dentro de tx (evita 500 por rateBcv null)
   private async recalcTotalsWithVatTx(tx: any, saleId: number) {
     const sale = await tx.saleInvoice.findUnique({
       where: { id: saleId },
@@ -672,7 +657,6 @@ export class SalesService {
     });
 
     const subtotalUsd = round2(items.reduce((acc, it) => acc + toNum(it.subtotalUsd), 0));
-
     const applyVat = Boolean(sale?.applyVat);
     const vatRate = toNum(sale?.vatRate);
     const vatUsd = applyVat ? round2(subtotalUsd * (vatRate / 100)) : 0;
@@ -690,7 +674,6 @@ export class SalesService {
       vatBs = round2(vatUsd * rate);
       totalBs = round2(totalUsd * rate);
     }
-    // Draft en VES sin tasa -> todo Bs = 0 (sin explotar)
 
     await tx.saleInvoice.update({
       where: { id: saleId },
@@ -705,19 +688,15 @@ export class SalesService {
     });
   }
 
-  // ✅ Cambiar lista de precios
+  // ===== SET PRICE LIST =====
   async setPriceList(saleId: number, priceListId: number | null) {
     const sale = await this.prisma.saleInvoice.findUnique({
       where: { id: saleId },
       select: { id: true, status: true },
     });
-
     if (!sale) throw new NotFoundException('Venta no encontrada');
-
     if (sale.status !== 'DRAFT') {
-      throw new BadRequestException(
-        'Solo puedes cambiar la lista de precios en DRAFT',
-      );
+      throw new BadRequestException('Solo puedes cambiar la lista de precios en DRAFT');
     }
 
     if (priceListId) {
@@ -733,7 +712,6 @@ export class SalesService {
       data: { priceListId: priceListId ?? null },
     });
 
-    // si la lista cambia, a veces quieres re-evaluar precios; por ahora devolvemos la venta
     return this.getById(saleId);
   }
 }

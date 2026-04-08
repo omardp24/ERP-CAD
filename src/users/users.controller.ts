@@ -1,3 +1,4 @@
+// src/users/users.controller.ts
 import {
   Body,
   Controller,
@@ -43,13 +44,32 @@ export class UsersController {
     return this.usersService.update(id, dto);
   }
 
+  // ===== TOGGLE ACTIVE =====
+  @Patch(':id/toggle-active')
+  toggleActive(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.toggleActive(id);
+  }
+
+  // ===== CHANGE PASSWORD =====
+  @Patch(':id/change-password')
+  changePassword(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { currentPassword: string; newPassword: string },
+  ) {
+    return this.usersService.changePassword(id, dto);
+  }
+
+  // ===== SCOPES =====
   @Get(':id/scopes')
   getScopes(@Param('id', ParseIntPipe) id: number) {
     return this.usersService.getScopes(id);
   }
 
-  @Post(':id/scopes') // POST para que sea fácil desde front
-  setScopes(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserScopesDto) {
+  @Post(':id/scopes')
+  setScopes(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateUserScopesDto,
+  ) {
     return this.usersService.setScopes(id, dto);
   }
 }

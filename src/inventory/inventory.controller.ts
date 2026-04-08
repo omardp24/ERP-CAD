@@ -20,13 +20,34 @@ import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
-  // ✅ lista inventario general (/inventories)
+  // ===== REPORTE (debe ir ANTES de :id) =====
+  @Get('report/summary')
+  async getReport(
+    @Query('company') company?: string,
+    @Query('category') category?: string,
+  ) {
+    return this.inventoryService.getReport({ company, category });
+  }
+
+  // ===== ALERTAS DE STOCK BAJO =====
+  @Get('alerts/low-stock')
+  async getLowStockAlerts(
+    @Query('minQty') minQty?: string,
+    @Query('company') company?: string,
+  ) {
+    return this.inventoryService.getStockAlerts({
+      minQty: minQty ? Number(minQty) : 0,
+      company,
+    });
+  }
+
+  // ===== LISTA INVENTARIO GENERAL =====
   @Get()
   async getAll() {
     return this.inventoryService.listItems();
   }
 
-  // ✅ lista para ventas autocomplete (/inventories/items?search=...&take=20)
+  // ===== LISTA PARA VENTAS (autocomplete) =====
   @Get('items')
   async listItems(
     @Query('search') search?: string,
@@ -38,49 +59,7 @@ export class InventoryController {
     });
   }
 
-  @Post('apply-purchase-item/:id')
-  async applyPurchaseItem(
-    @Param('id', ParseIntPipe) id: number,
-    @Body('warehouseId') warehouseIdRaw?: any,
-  ) {
-    const warehouseId =
-      warehouseIdRaw !== undefined && warehouseIdRaw !== null
-        ? Number(warehouseIdRaw)
-        : undefined;
-
-    return this.inventoryService.applyPurchaseItemToInventory(id, warehouseId);
-  }
-
-  @Post('apply-invoice/:invoiceId')
-  async applyInvoice(
-    @Param('invoiceId', ParseIntPipe) invoiceId: number,
-    @Body('warehouseId') warehouseIdRaw?: any,
-  ) {
-    const warehouseId =
-      warehouseIdRaw !== undefined && warehouseIdRaw !== null
-        ? Number(warehouseIdRaw)
-        : undefined;
-
-    return this.inventoryService.applyInvoiceToInventory(invoiceId, warehouseId);
-  }
-
-  @Post('initial-entry')
-  async createInitialEntry(@Body() dto: CreateInitialEntryDto) {
-    return this.inventoryService.createInitialEntry(dto);
-  }
-
-  // 🔥 consumo interno
-  @Post('internal-consumption')
-  async registerInternalConsumption(@Body() dto: CreateInternalConsumptionDto) {
-    return this.inventoryService.registerInternalConsumption(dto);
-  }
-
-  @Post('manual-movement')
-  async createManualMovement(@Body() dto: any) {
-    return this.inventoryService.createManualMovement(dto);
-  }
-
-  // ✅ movimientos globales con filtros (NORMALIZADO) + PERMISOS
+  // ===== MOVIMIENTOS GLOBALES =====
   @Get('movements')
   async listMovements(@Req() req: any, @Query() query: any) {
     const toInt = (v: any): number | undefined => {
@@ -88,7 +67,7 @@ export class InventoryController {
       const s = String(v).trim();
       if (!s || s === 'undefined' || s === 'null') return undefined;
       const n = Number(s);
-      if (!Number.isFinite(n) || n <= 0) return undefined; // 👈 clave: 0 no vale
+      if (!Number.isFinite(n) || n <= 0) return undefined;
       return n;
     };
 
@@ -109,19 +88,15 @@ export class InventoryController {
 
     const from = toStr(query.from);
     const to = toStr(query.to);
-
     const movementType = normalizeAll(query.movementType);
     const module = normalizeAll(query.module);
-
     const warehouseId = toInt(query.warehouseId);
     const inventoryItemId = toInt(query.inventoryItemId);
     const productId = toInt(query.productId);
-
     const search = toStr(query.search);
 
     const pageRaw = toInt(query.page);
     const pageSizeRaw = toInt(query.pageSize);
-
     const page = pageRaw ? Math.max(1, pageRaw) : 1;
     const pageSize = pageSizeRaw ? Math.min(100, Math.max(5, pageSizeRaw)) : 25;
 
@@ -143,9 +118,63 @@ export class InventoryController {
     );
   }
 
-  // ✅ movimientos por item
+  // ===== MOVIMIENTOS POR ITEM =====
   @Get(':id/movements')
   async getItemMovements(@Req() req: any, @Param('id', ParseIntPipe) id: number) {
     return this.inventoryService.getItemMovements(id, req.scopes, req.user?.role);
+  }
+
+  // ===== AJUSTE DE STOCK =====
+  @Post('adjust-stock')
+  async adjustStock(@Body() dto: any) {
+    return this.inventoryService.adjustStock({
+      inventoryItemId: Number(dto.inventoryItemId),
+      newQty: Number(dto.newQty),
+      reason: dto.reason ?? null,
+    });
+  }
+
+  // ===== CONSUMO INTERNO =====
+  @Post('internal-consumption')
+  async registerInternalConsumption(@Body() dto: CreateInternalConsumptionDto) {
+    return this.inventoryService.registerInternalConsumption(dto);
+  }
+
+  // ===== NOTA MANUAL =====
+  @Post('manual-movement')
+  async createManualMovement(@Body() dto: any) {
+    return this.inventoryService.createManualMovement(dto);
+  }
+
+  // ===== APLICAR PURCHASE ITEM =====
+  @Post('apply-purchase-item/:id')
+  async applyPurchaseItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('warehouseId') warehouseIdRaw?: any,
+  ) {
+    const warehouseId =
+      warehouseIdRaw !== undefined && warehouseIdRaw !== null
+        ? Number(warehouseIdRaw)
+        : undefined;
+    return this.inventoryService.applyPurchaseItemToInventory(id, warehouseId);
+  }
+
+  // ===== APLICAR FACTURA COMPLETA =====
+  @Post('apply-invoice/:invoiceId')
+  async applyInvoice(
+    @Param('invoiceId', ParseIntPipe) invoiceId: number,
+    @Body('warehouseId') warehouseIdRaw?: any,
+  ) {
+    const warehouseId =
+      warehouseIdRaw !== undefined && warehouseIdRaw !== null
+        ? Number(warehouseIdRaw)
+        : undefined;
+    return this.inventoryService.applyInvoiceToInventory(invoiceId, warehouseId);
+  }
+
+  // ===== INVENTARIO INICIAL =====
+  @Post('initial-entry')
+  async createInitialEntry(@Body() dto: CreateInitialEntryDto) {
+    return this.inventoryService.createInitialEntry(dto);
   }
 }

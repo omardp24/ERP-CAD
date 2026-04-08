@@ -1,3 +1,4 @@
+// src/users/users.service.ts
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
@@ -24,7 +25,7 @@ export class UsersService {
         email: true,
         name: true,
         role: true,
-        active: true, // ✅ IMPORTANTE
+        active: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -39,10 +40,10 @@ export class UsersService {
         email: true,
         name: true,
         role: true,
-        active: true, // ✅
+        active: true,
         createdAt: true,
         updatedAt: true,
-        password: true, // para sanitize
+        password: true,
       },
     });
 
@@ -64,7 +65,6 @@ export class UsersService {
         password: hashed,
         name: dto.name?.trim() || null,
         role: dto.role ?? UserRole.USER,
-        // active: dto.active ?? true, // ✅ si lo agregas a CreateUserDto
       },
       select: {
         id: true,
@@ -81,7 +81,6 @@ export class UsersService {
   }
 
   async update(id: number, dto: UpdateUserDto) {
-    // valida que exista
     const current = await this.prisma.user.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Usuario no encontrado');
 
@@ -89,31 +88,17 @@ export class UsersService {
 
     if (dto.email !== undefined) {
       const email = dto.email.trim().toLowerCase();
-
-      // ✅ validar duplicado
       const exists = await this.prisma.user.findUnique({ where: { email } });
       if (exists && exists.id !== id) {
         throw new BadRequestException('Ya existe un usuario con ese correo');
       }
-
       data.email = email;
     }
 
-    if (dto.name !== undefined) {
-      data.name = dto.name ? dto.name.trim() : null;
-    }
-
-    if (dto.role !== undefined) {
-      data.role = dto.role;
-    }
-
-    if (dto.active !== undefined) {
-      data.active = dto.active;
-    }
-
-    if (dto.password) {
-      data.password = await bcrypt.hash(dto.password, 10);
-    }
+    if (dto.name !== undefined) data.name = dto.name ? dto.name.trim() : null;
+    if (dto.role !== undefined) data.role = dto.role;
+    if (dto.active !== undefined) data.active = dto.active;
+    if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
 
     const user = await this.prisma.user.update({
       where: { id },
@@ -132,24 +117,49 @@ export class UsersService {
     return this.sanitizeUser(user);
   }
 
+  // ===== TOGGLE ACTIVE =====
+  async toggleActive(id: number) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { active: !user.active },
+      select: { id: true, email: true, name: true, active: true },
+    });
+  }
+
+  // ===== CHANGE PASSWORD =====
+  async changePassword(
+    id: number,
+    dto: { currentPassword: string; newPassword: string },
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    const valid = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!valid) throw new BadRequestException('La contraseña actual es incorrecta');
+
+    if (dto.newPassword.length < 6) {
+      throw new BadRequestException('La nueva contraseña debe tener al menos 6 caracteres');
+    }
+
+    await this.prisma.user.update({
+      where: { id },
+      data: { password: await bcrypt.hash(dto.newPassword, 10) },
+    });
+
+    return { ok: true, message: 'Contraseña actualizada correctamente.' };
+  }
+
   // ===== SCOPES =====
   async getScopes(userId: number) {
-    // valida que exista
     await this.findOne(userId);
 
     const [producerAccess, warehouseAccess, companyAccess] = await this.prisma.$transaction([
-      this.prisma.userProducerAccess.findMany({
-        where: { userId },
-        select: { producerId: true },
-      }),
-      this.prisma.userWarehouseAccess.findMany({
-        where: { userId },
-        select: { warehouseId: true },
-      }),
-      this.prisma.userCompanyAccess.findMany({
-        where: { userId },
-        select: { company: true },
-      }),
+      this.prisma.userProducerAccess.findMany({ where: { userId }, select: { producerId: true } }),
+      this.prisma.userWarehouseAccess.findMany({ where: { userId }, select: { warehouseId: true } }),
+      this.prisma.userCompanyAccess.findMany({ where: { userId }, select: { company: true } }),
     ]);
 
     const producerIds = producerAccess.map((x) => x.producerId);
@@ -157,11 +167,9 @@ export class UsersService {
     const companies = companyAccess.map((x) => x.company);
 
     return {
-      // si no hay filas => acceso a todo (como lo vienes manejando)
       allProducers: producerIds.length === 0,
       allWarehouses: warehouseIds.length === 0,
       allCompanies: companies.length === 0,
-
       producerIds,
       warehouseIds,
       companies,
@@ -207,7 +215,9 @@ export class UsersService {
       // companies
       await tx.userCompanyAccess.deleteMany({ where: { userId } });
       if (!allCompanies) {
-        const unique = Array.from(new Set(companies.map((c: any) => String(c).trim()))).filter(Boolean);
+        const unique = Array.from(
+          new Set(companies.map((c: any) => String(c).trim())),
+        ).filter(Boolean);
         if (unique.length) {
           await tx.userCompanyAccess.createMany({
             data: unique.map((company: string) => ({ userId, company })),

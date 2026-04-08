@@ -27,6 +27,16 @@ import { UpdateSaleDraftDto } from './dto/update-sale-draft.dto';
 export class SalesController {
   constructor(private readonly salesService: SalesService) {}
 
+  // ===== REPORT (debe ir ANTES de :id para que NestJS no lo confunda) =====
+  @Get('report/summary')
+  async report(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('company') company?: string,
+  ) {
+    return this.salesService.getReport({ from, to, company });
+  }
+
   // ===== LIST =====
   @Get()
   async list(
@@ -67,7 +77,7 @@ export class SalesController {
     return this.salesService.create(dto);
   }
 
-  // ===== UPDATE DRAFT (solo cabecera) =====
+  // ===== UPDATE DRAFT =====
   @Patch(':id/draft')
   async updateDraft(
     @Param('id', ParseIntPipe) id: number,
@@ -76,7 +86,7 @@ export class SalesController {
     return this.salesService.updateDraft(id, dto);
   }
 
-  // ===== SET PRICE LIST (DRAFT) =====
+  // ===== SET PRICE LIST =====
   @Patch(':id/price-list')
   async setPriceList(
     @Param('id', ParseIntPipe) id: number,
@@ -85,7 +95,7 @@ export class SalesController {
     return this.salesService.setPriceList(id, dto.priceListId ?? null);
   }
 
-  // ===== ADD ITEM (DRAFT) =====
+  // ===== ADD ITEM =====
   @Post(':id/items')
   async addItem(
     @Param('id', ParseIntPipe) id: number,
@@ -94,7 +104,7 @@ export class SalesController {
     return this.salesService.addItem(id, dto);
   }
 
-  // ===== REMOVE ITEM (DRAFT) =====
+  // ===== REMOVE ITEM =====
   @Delete(':id/items/:itemId')
   async removeItem(
     @Param('id', ParseIntPipe) id: number,
@@ -112,7 +122,7 @@ export class SalesController {
     return this.salesService.confirm(id, dto);
   }
 
-  // ===== CANCEL =====
+  // ===== CANCEL (DRAFT o CONFIRMED) =====
   @Post(':id/cancel')
   async cancel(@Param('id', ParseIntPipe) id: number) {
     return this.salesService.cancel(id);

@@ -11,8 +11,8 @@ import { CreateInternalConsumptionDto } from './dto/create-internal-consumption.
 type ListMovementsQuery = {
   from?: string;
   to?: string;
-  movementType?: string; // 'ALL' | 'IN' | 'OUT'
-  module?: string; // 'ALL' | 'PURCHASE' | 'INITIAL' | 'CONSUMO_INTERNO' | 'MANUAL' ...
+  movementType?: string;
+  module?: string;
   warehouseId?: number;
   inventoryItemId?: number;
   productId?: number;
@@ -21,14 +21,19 @@ type ListMovementsQuery = {
   pageSize: number;
 };
 
-// ✅ DTO simple para nota manual
 type ManualMovementDto = {
   productId: number;
   warehouseId?: number | null;
   movementType: 'IN' | 'OUT';
   quantity: number;
-  unitCostUsd?: number | null; // para IN puede venir, para OUT se usa avgCost si no viene
+  unitCostUsd?: number | null;
   note?: string | null;
+};
+
+type StockAdjustDto = {
+  inventoryItemId: number;
+  newQty: number;
+  reason?: string | null;
 };
 
 type RequestScopes = {
@@ -44,35 +49,19 @@ export class InventoryService {
   // =========================================================
   // Helpers
   // =========================================================
-
-  /**
-   * ✅ Aplica permisos de warehouse a un `where` de inventory_movements / inventory_lots.
-   * - ADMIN => no filtra
-   * - scopes.warehouseIds = null => acceso total (no filtra)
-   * - scopes.warehouseIds = [..] => filtra por esos
-   *
-   * También hace intersección si el query ya trae warehouse_id.
-   */
-  private applyWarehouseScopeToWhere(
-    where: any,
-    scopes?: RequestScopes,
-    role?: string,
-  ) {
+  private applyWarehouseScopeToWhere(where: any, scopes?: RequestScopes, role?: string) {
     if (role === 'ADMIN') return where;
     if (!scopes?.warehouseIds) return where;
 
     const allowed = scopes.warehouseIds;
 
-    // Si ya viene warehouse_id fijo (number), verificamos permiso
     if (typeof where.warehouse_id === 'number') {
       if (!allowed.includes(where.warehouse_id)) {
-        // fuerza vacío
         where.warehouse_id = { in: [] as number[] };
       }
       return where;
     }
 
-    // Si ya viene warehouse_id como { in: [...] } (poco común aquí)
     if (where.warehouse_id?.in && Array.isArray(where.warehouse_id.in)) {
       where.warehouse_id = {
         in: where.warehouse_id.in.filter((x: number) => allowed.includes(x)),
@@ -80,7 +69,6 @@ export class InventoryService {
       return where;
     }
 
-    // Si no venía, aplicamos lista permitida
     where.warehouse_id = { in: allowed };
     return where;
   }
@@ -89,15 +77,10 @@ export class InventoryService {
     productId: number,
     company: 'CAD' | 'SILO_AMAZO' = 'CAD',
   ) {
-    const product = await this.prisma.products.findUnique({
-      where: { id: productId },
-    });
-
+    const product = await this.prisma.products.findUnique({ where: { id: productId } });
     if (!product) throw new NotFoundException('Producto no encontrado');
 
-    // ✅ regla: code SIEMPRE = String(product.id)
     const inventoryCode = String(product.id);
-
     const category = (product.category as any) ?? 'INSUMO';
     const unit = product.unit ?? 'kg';
 
@@ -128,72 +111,42 @@ export class InventoryService {
     if (!Number.isFinite(n) || n <= 0) throw new BadRequestException(message);
   }
 
-  /**
-   * ✅ Normaliza el signo SIEMPRE en el backend:
-   * - OUT => negativo
-   * - IN / ADJUST / null => positivo
-   *
-   * Esto te protege aunque en la BD haya OUT guardado como positivo.
-   */
-  private normalizeSignedQty(
-    movementType: string | null | undefined,
-    rawQty: any,
-  ) {
+  private normalizeSignedQty(movementType: string | null | undefined, rawQty: any) {
     const qty = Number(rawQty ?? 0);
     if (!Number.isFinite(qty)) return 0;
-
     if (!movementType) return Math.abs(qty);
     if (movementType === 'OUT') return -Math.abs(qty);
-    return Math.abs(qty); // IN / ADJUST
+    return Math.abs(qty);
   }
 
-  /**
-   * ✅ Rango de fechas inclusivo: "to" incluye todo el día (23:59:59.999)
-   */
   private parseDateOnly(value?: string) {
     if (!value) return null;
-
-    // Esperamos YYYY-MM-DD (lo que sale de <input type="date">)
     const s = String(value).trim();
     if (!s) return null;
-
     const [y, m, d] = s.split('-').map((x) => Number(x));
     if (!y || !m || !d) return null;
-
     return { y, m, d };
   }
 
   private buildDateRange(from?: string, to?: string) {
     const fromParts = this.parseDateOnly(from);
     const toParts = this.parseDateOnly(to);
-
-    // Si no hay nada, no filtramos
     if (!fromParts && !toParts) return undefined;
 
     const range: any = {};
-
-    if (fromParts) {
-      // inicio del día
-      range.gte = new Date(fromParts.y, fromParts.m - 1, fromParts.d, 0, 0, 0, 0);
-    }
-
-    if (toParts) {
-      // ✅ fin del día (incluye TODO lo de hoy)
-      range.lte = new Date(toParts.y, toParts.m - 1, toParts.d, 23, 59, 59, 999);
-    }
-
+    if (fromParts) range.gte = new Date(fromParts.y, fromParts.m - 1, fromParts.d, 0, 0, 0, 0);
+    if (toParts) range.lte = new Date(toParts.y, toParts.m - 1, toParts.d, 23, 59, 59, 999);
     return range;
   }
 
   // =========================================================
-  // ✅ LISTA INVENTARIO PARA VENTAS (autocomplete /inventories/items)
+  // LISTA INVENTARIO PARA VENTAS (autocomplete)
   // =========================================================
   async listItemsForSales(opts: { search: string; take: number }) {
     const search = (opts.search || '').trim();
     const take = Math.min(Number(opts.take || 20), 50);
 
     const where: any = {};
-
     if (search) {
       where.OR = [
         { code: { contains: search, mode: 'insensitive' } },
@@ -201,38 +154,26 @@ export class InventoryService {
       ];
     }
 
-    const rows = await this.prisma.inventoryItem.findMany({
+    return this.prisma.inventoryItem.findMany({
       where,
       take,
       orderBy: { code: 'asc' },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        unit: true,
-      },
+      select: { id: true, code: true, name: true, unit: true, stockQty: true, avgCostUsd: true },
     });
-
-    return rows;
   }
 
   // =========================================================
-  // LISTA INVENTARIO (front /inventories)
+  // LISTA INVENTARIO GENERAL
   // =========================================================
   async listItems() {
-    const rows = await this.prisma.inventoryItem.findMany({
-      orderBy: { code: 'asc' },
-    });
+    const rows = await this.prisma.inventoryItem.findMany({ orderBy: { code: 'asc' } });
 
     return rows.map((row) => {
       const totalQty = Number(row.stockQty ?? 0);
       const reservedQty = Number(row.reservedQty ?? 0);
       const availableQty = totalQty - reservedQty;
-
       const avgCostUsd = Number(row.avgCostUsd ?? 0);
-      const totalCostUsd = row.totalCostUsd
-        ? Number(row.totalCostUsd)
-        : availableQty * avgCostUsd;
+      const totalCostUsd = row.totalCostUsd ? Number(row.totalCostUsd) : availableQty * avgCostUsd;
 
       return {
         id: row.id,
@@ -240,14 +181,12 @@ export class InventoryService {
         name: row.name,
         category: row.category,
         unit: row.unit,
-
         stockQty: totalQty,
         totalQty,
         reservedQty,
         availableQty,
         avgCostUsd,
         totalCostUsd,
-
         company: row.company,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -256,18 +195,162 @@ export class InventoryService {
   }
 
   // =========================================================
-  // HISTORIAL MOVIMIENTOS POR ITEM (detalle en inventarios page)
+  // REPORTE DE INVENTARIO
+  // =========================================================
+  async getReport(params: { company?: string; category?: string }) {
+    const where: any = {};
+    if (params.company) where.company = params.company;
+    if (params.category) where.category = params.category;
+
+    const rows = await this.prisma.inventoryItem.findMany({ where });
+
+    const totalItems = rows.length;
+    const totalStockUsd = rows.reduce(
+      (acc, r) => acc + Number(r.totalCostUsd ?? 0),
+      0,
+    );
+    const itemsSinStock = rows.filter((r) => Number(r.stockQty ?? 0) <= 0).length;
+    const itemsConStock = totalItems - itemsSinStock;
+
+    // Por categoría
+    const porCategoria: Record<string, { items: number; stockUsd: number }> = {};
+    for (const r of rows) {
+      const cat = r.category ?? 'SIN_CATEGORIA';
+      if (!porCategoria[cat]) porCategoria[cat] = { items: 0, stockUsd: 0 };
+      porCategoria[cat].items++;
+      porCategoria[cat].stockUsd = Math.round(
+        (porCategoria[cat].stockUsd + Number(r.totalCostUsd ?? 0)) * 100,
+      ) / 100;
+    }
+
+    // Top 10 items por valor
+    const topPorValor = rows
+      .map((r) => ({
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        unit: r.unit,
+        stockQty: Number(r.stockQty ?? 0),
+        avgCostUsd: Number(r.avgCostUsd ?? 0),
+        totalCostUsd: Number(r.totalCostUsd ?? 0),
+      }))
+      .sort((a, b) => b.totalCostUsd - a.totalCostUsd)
+      .slice(0, 10);
+
+    return {
+      totalItems,
+      itemsConStock,
+      itemsSinStock,
+      totalStockUsd: Math.round(totalStockUsd * 100) / 100,
+      porCategoria,
+      topPorValor,
+    };
+  }
+
+  // =========================================================
+  // ALERTAS DE STOCK BAJO
+  // =========================================================
+  async getStockAlerts(params: { minQty?: number; company?: string }) {
+    const minQty = Number(params.minQty ?? 0);
+    const where: any = {};
+    if (params.company) where.company = params.company;
+
+    const rows = await this.prisma.inventoryItem.findMany({
+      where,
+      orderBy: { stockQty: 'asc' },
+    });
+
+    const alerts = rows
+      .map((r) => ({
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        category: r.category,
+        unit: r.unit,
+        stockQty: Number(r.stockQty ?? 0),
+        reservedQty: Number(r.reservedQty ?? 0),
+        availableQty: Number(r.stockQty ?? 0) - Number(r.reservedQty ?? 0),
+        avgCostUsd: Number(r.avgCostUsd ?? 0),
+        company: r.company,
+      }))
+      .filter((r) => r.stockQty <= minQty);
+
+    return {
+      total: alerts.length,
+      minQtyUsed: minQty,
+      alerts,
+    };
+  }
+
+  // =========================================================
+  // AJUSTE DE STOCK
+  // =========================================================
+  async adjustStock(dto: StockAdjustDto) {
+    const { inventoryItemId, newQty, reason } = dto;
+
+    if (!Number.isFinite(newQty) || newQty < 0) {
+      throw new BadRequestException('La nueva cantidad debe ser un número mayor o igual a cero.');
+    }
+
+    const item = await this.prisma.inventoryItem.findUnique({
+      where: { id: inventoryItemId },
+    });
+    if (!item) throw new NotFoundException('Ítem de inventario no encontrado');
+
+    const prevQty = Number(item.stockQty ?? 0);
+    const avgCost = Number(item.avgCostUsd ?? 0);
+    const diff = newQty - prevQty;
+
+    if (diff === 0) {
+      return { ok: true, message: 'Sin cambios. La cantidad ya era la misma.' };
+    }
+
+    const newTotalCost = Math.round(newQty * avgCost * 100) / 100;
+    const movementType = diff > 0 ? 'IN' : 'OUT';
+
+    // Actualizar inventario
+    await this.prisma.inventoryItem.update({
+      where: { id: inventoryItemId },
+      data: {
+        stockQty: newQty,
+        totalCostUsd: newTotalCost,
+      },
+    });
+
+    // Registrar movimiento de ajuste
+    await this.prisma.inventory_movements.create({
+      data: {
+        lot_id: null,
+        warehouse_id: null,
+        movement_type: movementType as any,
+        quantity: Math.abs(diff),
+        cost: avgCost,
+        module: 'ADJUST',
+        reference_id: inventoryItemId,
+        notes: reason ?? `Ajuste de stock: ${prevQty} → ${newQty}`,
+      },
+    });
+
+    return {
+      ok: true,
+      message: `Stock ajustado de ${prevQty} a ${newQty} ${item.unit}.`,
+      prev: prevQty,
+      next: newQty,
+      diff,
+      movementType,
+    };
+  }
+
+  // =========================================================
+  // HISTORIAL MOVIMIENTOS POR ITEM
   // =========================================================
   async getItemMovements(inventoryItemId: number, scopes?: RequestScopes, role?: string) {
     const item = await this.prisma.inventoryItem.findUnique({
       where: { id: inventoryItemId },
     });
-
     if (!item) throw new NotFoundException('Ítem de inventario no encontrado');
 
     const where: any = { reference_id: inventoryItemId };
-
-    // ✅ aplicar permisos warehouse
     this.applyWarehouseScopeToWhere(where, scopes, role);
 
     const moves = await this.prisma.inventory_movements.findMany({
@@ -277,18 +360,15 @@ export class InventoryService {
     });
 
     return moves.map((m) => {
-      const signedQty = this.normalizeSignedQty(
-        (m as any).movement_type ?? null,
-        m.quantity,
-      );
+      const signedQty = this.normalizeSignedQty((m as any).movement_type ?? null, m.quantity);
       const cost = Number(m.cost ?? 0);
 
       return {
         id: m.id,
         movementType: (m as any).movement_type ?? null,
-        quantity: signedQty, // ✅ SIEMPRE con signo correcto
+        quantity: signedQty,
         cost,
-        totalCost: signedQty * cost, // ✅ total con signo correcto
+        totalCost: signedQty * cost,
         module: m.module,
         date: m.date,
         notes: m.notes,
@@ -299,24 +379,18 @@ export class InventoryService {
   }
 
   // =========================================================
-  // ✅ CONSUMO INTERNO (OUT negativo)
+  // CONSUMO INTERNO
   // =========================================================
   async registerInternalConsumption(dto: CreateInternalConsumptionDto) {
     const { productId, inventoryItemId, quantity, warehouseId, note } = dto;
-
     this.ensurePositive(quantity, 'La cantidad a consumir debe ser mayor a cero.');
 
-    // ✅ 1) localizar InventoryItem
     let item = null as any;
 
     if (inventoryItemId) {
-      item = await this.prisma.inventoryItem.findUnique({
-        where: { id: inventoryItemId },
-      });
+      item = await this.prisma.inventoryItem.findUnique({ where: { id: inventoryItemId } });
     } else if (productId) {
-      const { inventoryItem } = await this.getOrCreateInventoryItemByProductId(
-        Number(productId),
-      );
+      const { inventoryItem } = await this.getOrCreateInventoryItemByProductId(Number(productId));
       item = inventoryItem;
     }
 
@@ -324,7 +398,6 @@ export class InventoryService {
       throw new BadRequestException('No existe un ítem de inventario asociado a este producto.');
     }
 
-    // ✅ 2) validar stock suficiente (usamos stockQty)
     const available = Number(item.stockQty ?? 0);
     if (available < quantity) {
       throw new BadRequestException(
@@ -332,9 +405,8 @@ export class InventoryService {
       );
     }
 
-    // ✅ 3) actualizar saldos
     const avgCost = Number(item.avgCostUsd ?? 0);
-    const signedQty = -Math.abs(quantity); // OUT negativo
+    const signedQty = -Math.abs(quantity);
     const valueToDecrement = Math.abs(signedQty) * avgCost;
 
     await this.prisma.inventoryItem.update({
@@ -345,13 +417,12 @@ export class InventoryService {
       },
     });
 
-    // ✅ 4) movimiento
     await this.prisma.inventory_movements.create({
       data: {
         lot_id: null,
         warehouse_id: warehouseId ?? null,
         movement_type: 'OUT' as any,
-        quantity: signedQty, // ✅ NEGATIVO
+        quantity: signedQty,
         cost: avgCost,
         module: 'CONSUMO_INTERNO',
         reference_id: item.id,
@@ -363,7 +434,7 @@ export class InventoryService {
   }
 
   // =========================================================
-  // ✅ NOTA MANUAL (IN/OUT)
+  // NOTA MANUAL (IN/OUT)
   // =========================================================
   async createManualMovement(dto: ManualMovementDto) {
     const { productId, warehouseId, movementType, quantity, unitCostUsd, note } = dto;
@@ -375,8 +446,6 @@ export class InventoryService {
 
     const prevStock = Number(inventoryItem.stockQty ?? 0);
     const prevAvg = Number(inventoryItem.avgCostUsd ?? 0);
-
-    // qty con signo
     const signedQty = movementType === 'OUT' ? -Math.abs(quantity) : Math.abs(quantity);
 
     if (movementType === 'OUT') {
@@ -402,7 +471,7 @@ export class InventoryService {
           lot_id: null,
           warehouse_id: warehouseId ?? null,
           movement_type: 'OUT' as any,
-          quantity: signedQty, // NEGATIVO
+          quantity: signedQty,
           cost: costToUse,
           module: 'MANUAL',
           reference_id: inventoryItem.id,
@@ -418,20 +487,12 @@ export class InventoryService {
     if (incomingCost < 0) throw new BadRequestException('El costo no puede ser negativo');
 
     const newStock = prevStock + Math.abs(signedQty);
-    const newAvg =
-      newStock <= 0
-        ? 0
-        : (prevStock * prevAvg + Math.abs(signedQty) * incomingCost) / newStock;
-
+    const newAvg = newStock <= 0 ? 0 : (prevStock * prevAvg + Math.abs(signedQty) * incomingCost) / newStock;
     const newTotal = newStock * newAvg;
 
     await this.prisma.inventoryItem.update({
       where: { id: inventoryItem.id },
-      data: {
-        stockQty: newStock,
-        avgCostUsd: newAvg,
-        totalCostUsd: newTotal,
-      },
+      data: { stockQty: newStock, avgCostUsd: newAvg, totalCostUsd: newTotal },
     });
 
     await this.prisma.inventory_movements.create({
@@ -439,7 +500,7 @@ export class InventoryService {
         lot_id: null,
         warehouse_id: warehouseId ?? null,
         movement_type: 'IN' as any,
-        quantity: Math.abs(signedQty), // POSITIVO
+        quantity: Math.abs(signedQty),
         cost: incomingCost,
         module: 'MANUAL',
         reference_id: inventoryItem.id,
@@ -451,7 +512,7 @@ export class InventoryService {
   }
 
   // =========================================================
-  // APLICAR PURCHASE ITEM (IN positivo)
+  // APLICAR PURCHASE ITEM (IN)
   // =========================================================
   async applyPurchaseItemToInventory(purchaseItemId: number, warehouseId?: number) {
     const purchaseItem = await this.prisma.purchaseItem.findUnique({
@@ -461,15 +522,11 @@ export class InventoryService {
 
     if (!purchaseItem) throw new NotFoundException('PurchaseItem no encontrado');
     if (!purchaseItem.product) {
-      throw new BadRequestException(
-        'La línea de compra no tiene producto asociado (productId es null).',
-      );
+      throw new BadRequestException('La línea de compra no tiene producto asociado.');
     }
 
     const product = purchaseItem.product;
     const inventoryCode = String(product.id);
-    const category = (product.category as any) ?? 'INSUMO';
-    const unit = purchaseItem.unit ?? product.unit ?? 'kg';
 
     let inventoryItem = await this.prisma.inventoryItem.findUnique({
       where: { code: inventoryCode },
@@ -480,8 +537,8 @@ export class InventoryService {
         data: {
           code: inventoryCode,
           name: product.name ?? purchaseItem.description,
-          category,
-          unit,
+          category: (product.category as any) ?? 'INSUMO',
+          unit: purchaseItem.unit ?? product.unit ?? 'kg',
           company: 'CAD',
           stockQty: 0,
           reservedQty: 0,
@@ -493,26 +550,18 @@ export class InventoryService {
 
     const prevStock = Number(inventoryItem.stockQty ?? 0);
     const prevAvg = Number(inventoryItem.avgCostUsd ?? 0);
-
     const qty = Number(purchaseItem.quantity ?? 0);
     const unitCost = Number(purchaseItem.unitPrice ?? 0);
 
-    if (qty <= 0) {
-      throw new BadRequestException('La cantidad de compra debe ser mayor a cero.');
-    }
+    if (qty <= 0) throw new BadRequestException('La cantidad de compra debe ser mayor a cero.');
 
     const newStock = prevStock + qty;
-    const newAvg =
-      newStock <= 0 ? 0 : (prevStock * prevAvg + qty * unitCost) / newStock;
+    const newAvg = newStock <= 0 ? 0 : (prevStock * prevAvg + qty * unitCost) / newStock;
     const newTotal = newStock * newAvg;
 
     const updatedInventoryItem = await this.prisma.inventoryItem.update({
       where: { id: inventoryItem.id },
-      data: {
-        stockQty: newStock,
-        avgCostUsd: newAvg,
-        totalCostUsd: newTotal,
-      },
+      data: { stockQty: newStock, avgCostUsd: newAvg, totalCostUsd: newTotal },
     });
 
     await this.prisma.inventory_movements.create({
@@ -520,7 +569,7 @@ export class InventoryService {
         lot_id: null,
         warehouse_id: warehouseId ?? null,
         movement_type: 'IN' as any,
-        quantity: Math.abs(qty), // POSITIVO
+        quantity: Math.abs(qty),
         cost: unitCost,
         module: 'PURCHASE',
         reference_id: updatedInventoryItem.id,
@@ -556,7 +605,7 @@ export class InventoryService {
   }
 
   // =========================================================
-  // INVENTARIO INICIAL (IN positivo)
+  // INVENTARIO INICIAL
   // =========================================================
   async createInitialEntry(dto: CreateInitialEntryDto) {
     this.ensurePositive(dto.quantity, 'La cantidad inicial debe ser mayor a cero.');
@@ -568,22 +617,16 @@ export class InventoryService {
 
     const prevStock = Number(inventoryItem.stockQty ?? 0);
     const prevAvg = Number(inventoryItem.avgCostUsd ?? 0);
-
     const qty = Number(dto.quantity);
     const unitCost = Number(dto.unitCostUsd ?? 0);
 
     const newStock = prevStock + qty;
-    const newAvg =
-      newStock <= 0 ? 0 : (prevStock * prevAvg + qty * unitCost) / newStock;
+    const newAvg = newStock <= 0 ? 0 : (prevStock * prevAvg + qty * unitCost) / newStock;
     const newTotal = newStock * newAvg;
 
     await this.prisma.inventoryItem.update({
       where: { id: inventoryItem.id },
-      data: {
-        stockQty: newStock,
-        avgCostUsd: newAvg,
-        totalCostUsd: newTotal,
-      },
+      data: { stockQty: newStock, avgCostUsd: newAvg, totalCostUsd: newTotal },
     });
 
     await this.prisma.inventory_movements.create({
@@ -591,7 +634,7 @@ export class InventoryService {
         lot_id: null,
         warehouse_id: dto.warehouseId ?? null,
         movement_type: 'IN' as any,
-        quantity: Math.abs(qty), // POSITIVO
+        quantity: Math.abs(qty),
         cost: unitCost,
         module: 'INITIAL',
         reference_id: inventoryItem.id,
@@ -603,32 +646,14 @@ export class InventoryService {
   }
 
   // =========================================================
-  // LISTADO GLOBAL DE MOVIMIENTOS (/inventories/movements)
+  // LISTADO GLOBAL DE MOVIMIENTOS
   // =========================================================
   async listMovements(q: ListMovementsQuery, scopes?: RequestScopes, role?: string) {
-    const {
-      from,
-      to,
-      movementType,
-      module,
-      warehouseId,
-      inventoryItemId,
-      productId,
-      search,
-      page,
-      pageSize,
-    } = q;
+    const { from, to, movementType, module, warehouseId, inventoryItemId, productId, search, page, pageSize } = q;
 
     let resolvedInventoryItemId = inventoryItemId;
 
-    // ⚠️ SOLO mapear productId → inventoryItem SI NO hay otros filtros
-    if (
-      !resolvedInventoryItemId &&
-      productId &&
-      !warehouseId &&
-      !movementType &&
-      !module
-    ) {
+    if (!resolvedInventoryItemId && productId && !warehouseId && !movementType && !module) {
       const invItem = await this.prisma.inventoryItem.findUnique({
         where: { code: String(productId) },
       });
@@ -639,11 +664,9 @@ export class InventoryService {
 
     if (warehouseId) where.warehouse_id = warehouseId;
     if (resolvedInventoryItemId) where.reference_id = resolvedInventoryItemId;
-
     if (movementType && movementType !== 'ALL') where.movement_type = movementType;
     if (module && module !== 'ALL') where.module = module;
 
-    // ✅ fechas inclusivas
     const dateRange = this.buildDateRange(from, to);
     if (dateRange) where.date = dateRange;
 
@@ -651,7 +674,6 @@ export class InventoryService {
       where.notes = { contains: search.trim(), mode: 'insensitive' };
     }
 
-    // ✅ aplicar permisos de warehouses (con intersección)
     this.applyWarehouseScopeToWhere(where, scopes, role);
 
     const total = await this.prisma.inventory_movements.count({ where });
@@ -676,11 +698,7 @@ export class InventoryService {
 
     const items = rows.map((m) => {
       const inv = m.reference_id ? invMap.get(m.reference_id) : null;
-
-      const signedQty = this.normalizeSignedQty(
-        (m as any).movement_type ?? null,
-        m.quantity,
-      );
+      const signedQty = this.normalizeSignedQty((m as any).movement_type ?? null, m.quantity);
       const cost = Number(m.cost ?? 0);
 
       return {
