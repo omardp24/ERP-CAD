@@ -383,8 +383,10 @@ export class SalesService {
       }
 
       await this.recalcTotalsWithVatTx(tx, saleId);
-      return this.getById(saleId);
     }, { timeout: 30000 });
+
+    // ✅ getById FUERA de la transacción
+    return this.getById(saleId);
   }
 
   // ===== CONFIRM SALE =====
@@ -489,8 +491,10 @@ export class SalesService {
         });
       }
 
-      return this.getById(saleId);
     }, { timeout: 30000 });
+
+    // ✅ getById FUERA de la transacción
+    return this.getById(saleId);
   }
 
   // ===== CANCEL (DRAFT o CONFIRMED) =====
@@ -533,13 +537,15 @@ export class SalesService {
         data: { status: 'CANCELLED' },
       });
 
-      return this.getById(saleId);
     }, { timeout: 30000 });
+
+    // ✅ getById FUERA de la transacción
+    return this.getById(saleId);
   }
 
   // ===== ADD PAYMENT =====
   async addPayment(saleId: number, dto: CreateSalePaymentDto) {
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const sale = await tx.saleInvoice.findUnique({
         where: { id: saleId },
         include: { payments: true },
@@ -572,9 +578,10 @@ export class SalesService {
         where: { id: saleId },
         data: { paymentStatus },
       });
-
-      return this.getById(saleId);
     }, { timeout: 30000 });
+
+    // ✅ getById FUERA de la transacción para no bloquear el pool
+    return this.getById(saleId);
   }
 
   // ===== REPORTS =====
