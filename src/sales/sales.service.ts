@@ -384,7 +384,7 @@ export class SalesService {
 
       await this.recalcTotalsWithVatTx(tx, saleId);
       return this.getById(saleId);
-    });
+    }, { timeout: 30000 });
   }
 
   // ===== CONFIRM SALE =====
@@ -490,7 +490,7 @@ export class SalesService {
       }
 
       return this.getById(saleId);
-    });
+    }, { timeout: 30000 });
   }
 
   // ===== CANCEL (DRAFT o CONFIRMED) =====
@@ -534,7 +534,7 @@ export class SalesService {
       });
 
       return this.getById(saleId);
-    });
+    }, { timeout: 30000 });
   }
 
   // ===== ADD PAYMENT =====
@@ -574,7 +574,7 @@ export class SalesService {
       });
 
       return this.getById(saleId);
-    });
+    }, { timeout: 30000 });
   }
 
   // ===== REPORTS =====
@@ -644,7 +644,7 @@ export class SalesService {
   private async recalcTotalsWithVat(saleId: number) {
     return this.prisma.$transaction(async (tx) => {
       await this.recalcTotalsWithVatTx(tx, saleId);
-    });
+    }, { timeout: 30000 });
   }
 
   private async recalcTotalsWithVatTx(tx: any, saleId: number) {
