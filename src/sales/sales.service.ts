@@ -504,11 +504,13 @@ export class SalesService {
       if (sale.status === 'CANCELLED')
         throw new BadRequestException('La venta ya está cancelada');
 
-      // Si estaba CONFIRMED: devolver stock al inventario
+      // ✅ Si estaba CONFIRMED: devolver stock al inventario
       if (sale.status === 'CONFIRMED') {
         for (const it of sale.items) {
           const qty = Number(it.quantity);
-          const avgCost = Number(it.avgCostUsdAtSale ?? it.unitPriceUsd);
+
+          // ✅ Usar avgCostUsdAtSale si existe, si no unitPriceUsd, si no 0
+          const avgCost = toNum(it.avgCostUsdAtSale) || toNum(it.unitPriceUsd) || 0;
 
           const inv = await tx.inventoryItem.findUnique({ where: { id: it.inventoryItemId } });
           if (!inv) continue;
